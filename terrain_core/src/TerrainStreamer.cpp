@@ -1,6 +1,6 @@
-#include "TerrainStreamer.hpp"
+#include <terrain/TerrainStreamer.hpp>
 
-#include "TerrainMesh.hpp"
+#include <terrain/TerrainMesh.hpp>
 
 #include <glm/geometric.hpp>
 

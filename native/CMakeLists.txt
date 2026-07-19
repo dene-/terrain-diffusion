@@ -41,34 +41,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(SDL3_shadercross)
 
 FetchContent_Declare(
-    glm
-    GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(glm)
-
-set(HTTPLIB_TEST OFF CACHE BOOL "" FORCE)
-set(HTTPLIB_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    cpp_httplib
-    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-    GIT_TAG v0.18.3
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(cpp_httplib)
-
-set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-set(JSON_Install OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(nlohmann_json)
-
-FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
@@ -76,15 +48,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../terrain_core" "${CMAKE_CURRENT_BINARY_DIR}/terrain_core")
+
 add_executable(terrain_native
     src/main.cpp
     src/Application.cpp
     src/CameraController.cpp
     src/Hud.cpp
-    src/VisualConfig.cpp
-    src/TerrainClient.cpp
-    src/TerrainMesh.cpp
-    src/TerrainStreamer.cpp
     src/Renderer.cpp
 )
 
@@ -95,9 +65,7 @@ target_include_directories(terrain_native SYSTEM PRIVATE "${stb_SOURCE_DIR}")
 target_link_libraries(terrain_native PRIVATE
     SDL3::SDL3-static
     SDL3_shadercross::SDL3_shadercross-static
-    glm::glm
-    httplib::httplib
-    nlohmann_json::nlohmann_json
+    terrain::core
 )
 
 target_compile_definitions(terrain_native PRIVATE

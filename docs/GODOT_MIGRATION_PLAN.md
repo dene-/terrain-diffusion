@@ -190,19 +190,19 @@ Exit criteria:
 
 ## Milestone 2 - extract the renderer-independent terrain core
 
-- [ ] Introduce a small `terrain_core` target without SDL, SDL_GPU, or Godot
+- [x] Introduce a small `terrain_core` target without SDL, SDL_GPU, or Godot
   dependencies.
-- [ ] Move or wrap metric configuration and tile/source types first.
-- [ ] Move or wrap `TerrainClient` network/decode/page-cache behavior.
-- [ ] Move or wrap `TerrainMesh` CPU generation and ecological placement.
-- [ ] Move or wrap `TerrainStreamer` scheduling/readiness/cache behavior.
-- [ ] Keep the native application building against the same extracted core as
+- [x] Move metric configuration and tile/source types first.
+- [x] Move `TerrainClient` network/decode/page-cache behavior.
+- [x] Move `TerrainMesh` CPU generation and ecological placement.
+- [x] Move `TerrainStreamer` scheduling/readiness/cache behavior.
+- [x] Keep the native application building against the same extracted core as
   a regression reference.
-- [ ] Add an adapter that translates ready core mesh buffers to Godot arrays
+- [x] Add an adapter that translates ready core mesh buffers to Godot arrays
   without per-vertex object allocation.
-- [ ] Add an adapter that bulk-packs vegetation transforms/custom data for
+- [x] Add an adapter that bulk-packs vegetation transforms/custom data for
   `MultiMesh`.
-- [ ] Log tile state transitions and slow operations only on events, never per
+- [x] Log tile state transitions and slow operations only on events, never per
   frame.
 
 Exit criteria:
@@ -212,16 +212,16 @@ Exit criteria:
 
 ## Milestone 3 - one-tile vertical slice
 
-- [ ] Request one deterministic detailed tile from the existing Terrain API.
-- [ ] Decode it through `terrain_core` and verify physical extents in logs.
-- [ ] Create one `ArrayMesh` surface with indexed geometry and smooth physical
+- [x] Request one deterministic detailed tile from the existing Terrain API.
+- [x] Decode it through `terrain_core` and verify physical extents in logs.
+- [x] Create one `ArrayMesh` surface with indexed geometry and smooth physical
   normals.
-- [ ] Pack slope/curvature/wetness/forest/rock/scree/snow fields into Godot
+- [x] Pack slope/curvature/wetness/forest/rock/scree/snow fields into Godot
   custom vertex channels or compact textures.
-- [ ] Upload the mesh on the Godot main thread through a bounded queue.
-- [ ] Render a minimal terrain shader with linear color handling.
-- [ ] Spawn the player at sampled terrain height plus 1.68 m eye height.
-- [ ] Add mouse-look, walk, run, jump, fly, wheel fly-speed, and aim-distance
+- [x] Upload the mesh on the Godot main thread through a bounded queue.
+- [x] Render a minimal terrain shader with linear color handling.
+- [x] Spawn the player at sampled terrain height plus 1.68 m eye height.
+- [x] Add mouse-look, walk, run, jump, fly, wheel fly-speed, and aim-distance
   controls matching the native client.
 - [M] Inspect scale, orientation, normals, grounding, and camera behavior.
 
@@ -413,9 +413,10 @@ assumed correct.
 
 ## Current next action
 
-**Milestone 2:** extract the renderer-independent terrain types, client, mesh,
-configuration, and streamer into a shared `terrain_core` CMake target while
-keeping the native application buildable against the same code.
+**Milestone 3:** request and render one deterministic detailed Terrain
+Diffusion tile through `terrain_core`, then inspect the grounded playable
+camera against that authoritative mesh. The end-to-end data path is complete;
+visual scale, grounding, and controls remain a manual checkpoint.
 
 ## Decision log
 
@@ -453,6 +454,28 @@ visual baseline, but they do not contain 1% low, cache-hit, or complete timing
 and memory dumps. The Terrain API was offline during the scaffold checkpoint,
 so `/world` spacing confirmation and the missing counters remain marked for
 manual capture instead of being guessed.
+
+### 2026-07-19 - shared terrain_core target
+
+Move the renderer-independent types, client, mesh derivation, visual
+configuration, and streamer intact into `terrain_core`. Both the native SDL
+application and Godot GDExtension link the same static library. The Godot
+adapter converts ready mesh data through packed arrays and vegetation through
+one `MultiMesh` float buffer per batch, preserving the no-object-per-tree
+architecture.
+
+### 2026-07-19 - one-tile Godot vertical slice
+
+The first playable slice requests one deterministic scale-8 terrain tile on a
+background C++ worker, transfers only plain core data across the thread
+boundary, and creates Godot mesh, collision, material, and player grounding on
+the main thread. `PlayerController` supplies metre-scaled walking, running,
+jumping, flying, wheel speed adjustment, and aim-distance reporting. Godot
+4.7.1 loads the extension, scene, shader, and custom classes without errors.
+With seed `7851568387153385500`, the live slice produced a 480 m tile at 3.75 m
+sample spacing with 17,153 vertices; the request took 54.3 ms and detailed-page
+decode/cache preparation took 222.8 ms. Visual grounding remains marked for
+manual validation.
 
 ### 2026-07-19 - skill selection
 

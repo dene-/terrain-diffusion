@@ -9,6 +9,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
+add_subdirectory(
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../terrain_core"
+    "${CMAKE_CURRENT_BINARY_DIR}/terrain_core"
+)
+
 # godot-cpp currently has no 4.7 release branch. This exact upstream commit is
 # the first stable master snapshot used here whose generated API advertises
 # Godot 4.7 support. Pinning avoids silently moving with master.
@@ -30,11 +35,13 @@ FetchContent_MakeAvailable(godot_cpp)
 
 add_library(terrain_stream_godot SHARED
     src/register_types.cpp
+    src/PlayerController.cpp
+    src/TerrainGodotAdapter.cpp
     src/TerrainWorld3D.cpp
 )
 
 target_include_directories(terrain_stream_godot PRIVATE src)
-target_link_libraries(terrain_stream_godot PRIVATE godot-cpp)
+target_link_libraries(terrain_stream_godot PRIVATE godot-cpp terrain::core)
 
 get_target_property(GODOTCPP_SUFFIX godot-cpp GODOTCPP_SUFFIX)
 

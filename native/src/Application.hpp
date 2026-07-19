@@ -3,7 +3,7 @@
 #include "CameraController.hpp"
 #include "Config.hpp"
 #include "Renderer.hpp"
-#include "TerrainStreamer.hpp"
+#include <terrain/TerrainStreamer.hpp>
 
 #include <SDL3/SDL_video.h>
 

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Config.hpp"
-#include "TerrainStreamer.hpp"
-#include "TerrainTypes.hpp"
+#include <terrain/TerrainStreamer.hpp>
+#include <terrain/TerrainTypes.hpp>
 
 #include <SDL3/SDL_events.h>
 

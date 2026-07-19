@@ -1,4 +1,4 @@
-#include "VisualConfig.hpp"
+#include <terrain/VisualConfig.hpp>
 
 #include <nlohmann/json.hpp>
 

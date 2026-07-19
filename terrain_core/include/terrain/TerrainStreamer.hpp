@@ -1,8 +1,8 @@
 #pragma once
 
-#include "TerrainClient.hpp"
-#include "TerrainTypes.hpp"
-#include "VisualConfig.hpp"
+#include <terrain/TerrainClient.hpp>
+#include <terrain/TerrainTypes.hpp>
+#include <terrain/VisualConfig.hpp>
 
 #include <chrono>
 #include <condition_variable>

@@ -1,5 +1,6 @@
 #include "register_types.hpp"
 
+#include "PlayerController.hpp"
 #include "TerrainWorld3D.hpp"
 
 #include <gdextension_interface.h>
@@ -10,6 +11,7 @@ void initialize_terrain_stream_module(const godot::ModuleInitializationLevel lev
     if (level != godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+    GDREGISTER_CLASS(terrain::godot_adapter::PlayerController);
     GDREGISTER_CLASS(terrain::godot_adapter::TerrainWorld3D);
 }
 
@@ -37,4 +39,3 @@ GDExtensionBool GDE_EXPORT terrain_stream_library_init(
 }
 
 }
-

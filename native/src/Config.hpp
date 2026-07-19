@@ -1,6 +1,6 @@
 #pragma once
 
-#include "VisualConfig.hpp"
+#include <terrain/VisualConfig.hpp>
 
 #include <algorithm>
 #include <cstdint>

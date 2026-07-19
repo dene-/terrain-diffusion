@@ -1,4 +1,4 @@
-#include "TerrainMesh.hpp"
+#include <terrain/TerrainMesh.hpp>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>

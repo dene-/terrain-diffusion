@@ -1,7 +1,7 @@
 #pragma once
 
-#include "TerrainTypes.hpp"
-#include "VisualConfig.hpp"
+#include <terrain/TerrainTypes.hpp>
+#include <terrain/VisualConfig.hpp>
 
 namespace terrain {
 

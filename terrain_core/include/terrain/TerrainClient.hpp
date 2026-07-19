@@ -1,6 +1,6 @@
 #pragma once
 
-#include "TerrainTypes.hpp"
+#include <terrain/TerrainTypes.hpp>
 
 #include <httplib.h>
 

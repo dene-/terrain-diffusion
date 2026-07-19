@@ -1,6 +1,6 @@
 #include "Application.hpp"
 
-#include "TerrainClient.hpp"
+#include <terrain/TerrainClient.hpp>
 
 #include <SDL3/SDL.h>
 

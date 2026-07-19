@@ -2,7 +2,7 @@
 
 #include "Config.hpp"
 #include "Hud.hpp"
-#include "TerrainTypes.hpp"
+#include <terrain/TerrainTypes.hpp>
 
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_video.h>
