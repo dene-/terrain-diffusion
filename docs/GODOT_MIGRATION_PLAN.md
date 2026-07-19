@@ -150,18 +150,18 @@ Main (Node)
 
 ## Milestone 0 - freeze baseline and specify contracts
 
-- [ ] Record the exact current native build/run commands and fixed visual seed.
-- [ ] Capture baseline eye-level, canopy, 3 km, 30 km, nadir, and orbital
+- [x] Record the exact current native build/run commands and fixed visual seed.
+- [x] Capture baseline eye-level, canopy, 3 km, 30 km, nadir, and orbital
   screenshots using the existing bookmarks.
-- [ ] Record frame time, 1% low, draw counts, resident tiles, cache hits,
+- [M] Record frame time, 1% low, draw counts, resident tiles, cache hits,
   request/decode/derive/upload timings, terrain memory, and vegetation memory.
-- [ ] Document current Terrain API request/response examples for `/world`,
+- [x] Document current Terrain API request/response examples for `/world`,
   `/terrain`, `/terrain/lod`, and `/terrain/orbital` without changing them.
-- [ ] Confirm authoritative spacing and scale values from `/world` at runtime.
-- [ ] Define the minimal renderer-independent C++ interfaces required by Godot:
+- [M] Confirm authoritative spacing and scale values from `/world` at runtime.
+- [x] Define the minimal renderer-independent C++ interfaces required by Godot:
   terrain source, stream update, ready-tile extraction, cache stats, and
   absolute/local coordinate conversion.
-- [ ] Record ownership/lifetime rules for every buffer crossing into Godot.
+- [x] Record ownership/lifetime rules for every buffer crossing into Godot.
 
 Exit criteria:
 
@@ -170,17 +170,17 @@ Exit criteria:
 
 ## Milestone 1 - Godot and GDExtension scaffold
 
-- [ ] Create `godot/project.godot` targeting Godot 4.7.1 Forward+.
-- [ ] Enable the pinned Godot Forge MCP entry in `.codex/config.toml`.
-- [ ] Add the official `godot-cpp` dependency pinned to the matching Godot 4.7
-  compatibility branch/tag.
-- [ ] Create a cross-platform CMake/SCons GDExtension build producing macOS,
+- [x] Create `godot/project.godot` targeting Godot 4.7.1 Forward+.
+- [x] Enable the pinned Godot Forge MCP entry in `.codex/config.toml`.
+- [x] Add the official `godot-cpp` dependency pinned to an exact commit with
+  explicit Godot 4.7 API generation because no 4.7 branch or tag exists yet.
+- [x] Create a cross-platform CMake GDExtension build producing macOS,
   Windows, and Linux library names expected by one `.gdextension` resource.
-- [ ] Create the target scene tree with empty terrain, player, environment, and
+- [x] Create the target scene tree with empty terrain, player, environment, and
   HUD nodes.
-- [ ] Register a minimal `TerrainWorld3D` C++ class and expose typed properties,
+- [x] Register a minimal `TerrainWorld3D` C++ class and expose typed properties,
   signals, and read-only diagnostics.
-- [ ] Build the extension and launch the empty scene on Apple Silicon.
+- [x] Build the extension and launch the empty scene on Apple Silicon.
 - [M] Confirm editor reloads the extension without stale-library crashes.
 
 Exit criteria:
@@ -413,8 +413,9 @@ assumed correct.
 
 ## Current next action
 
-**Milestone 0:** record the native build/run command, fixed visual seed,
-screenshots, and performance counters before creating `godot/`.
+**Milestone 2:** extract the renderer-independent terrain types, client, mesh,
+configuration, and streamer into a shared `terrain_core` CMake target while
+keeping the native application buildable against the same code.
 
 ## Decision log
 
@@ -437,6 +438,21 @@ justified by profiling.
 Use the installed Godot 4.7.1 editor and pin `godot-cpp` to compatible 4.7
 bindings. The editor has been launched once successfully on the development
 Mac.
+
+### 2026-07-19 - exact godot-cpp commit with API 4.7
+
+The official `godot-cpp` repository did not yet publish a `4.7` branch or tag.
+Pin commit `ba0edfed90512ec64aba51d4295a3e7e30112f86`, whose CMake configuration
+explicitly supports `GODOTCPP_API_VERSION=4.7`, rather than following an
+unversioned moving branch.
+
+### 2026-07-19 - baseline evidence gaps remain manual
+
+Existing native screenshots and persisted HUD measurements establish the
+visual baseline, but they do not contain 1% low, cache-hit, or complete timing
+and memory dumps. The Terrain API was offline during the scaffold checkpoint,
+so `/world` spacing confirmation and the missing counters remain marked for
+manual capture instead of being guessed.
 
 ### 2026-07-19 - skill selection
 

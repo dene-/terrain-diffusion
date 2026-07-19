@@ -1,5 +1,6 @@
-# Project-local MCP configuration. Enable after godot/project.godot exists.
+# Project-local MCP configuration. Godot Forge provides project-aware docs,
+# scene analysis, and LSP diagnostics without occupying the Terrain API port.
 [mcp_servers.godot-forge]
 command = "npx"
 args = ["-y", "godot-forge@0.1.4", "--project", "godot"]
-enabled = false
+enabled = true

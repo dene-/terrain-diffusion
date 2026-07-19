@@ -206,6 +206,9 @@ checkpoints/
 # CMake
 cmake-build-*/
 native/build/
+godot/.godot/
+godot/bin/*
+godot/extension/build/
 
 # Mongo Explorer plugin
 .idea/**/mongoSettings.xml
