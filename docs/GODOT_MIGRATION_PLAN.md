@@ -413,10 +413,11 @@ assumed correct.
 
 ## Current next action
 
-**Milestone 3:** request and render one deterministic detailed Terrain
-Diffusion tile through `terrain_core`, then inspect the grounded playable
-camera against that authoritative mesh. The end-to-end data path is complete;
-visual scale, grounding, and controls remain a manual checkpoint.
+**Milestone 4:** connect the shared `TerrainStreamer` to `TerrainWorld3D` and
+replace the one-tile bootstrap with readiness-aware resident render tiles. The
+one-tile scale, orientation, normals, and dry-land grounding are now visually
+confirmed; mouse-look and movement remain a user manual checkpoint while the
+streaming integration proceeds.
 
 ## Decision log
 
@@ -486,6 +487,20 @@ cursor. `PlayerController` and `TerrainWorld3D` now explicitly disable runtime
 processing, input capture, and terrain requests under `Engine::is_editor_hint()`.
 Editor-mode diagnostics are clean, while a separate game-mode run still loads
 the deterministic scale-8 tile normally.
+
+### 2026-07-19 - Godot winding and dry-land bootstrap
+
+The shared terrain core emits counter-clockwise indices for the native
+renderer, while Godot 4 treats clockwise triangles as front-facing. Reverse
+each triangle only in `TerrainGodotAdapter` so the authoritative core buffers
+remain unchanged. The original world tile for seed `7851568387153385500` is
+seabed near -110 m, which made the corrected surface appear empty or edge-on.
+The one-tile bootstrap now queries deterministic Terrain Diffusion latent data
+only to locate a dry, low-slope coordinate, then fetches and renders the
+containing scale-8 detailed tile. No latent/coarse geometry is displayed and a
+center-grounded fallback remains available if no dry candidate is found. A
+Godot movie capture visually confirmed tile `0:24:48` at 3.75 m spacing with a
+walkable spawn at 76 m elevation.
 
 ### 2026-07-19 - skill selection
 

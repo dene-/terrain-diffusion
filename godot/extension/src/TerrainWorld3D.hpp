@@ -48,6 +48,7 @@ private:
         WorldInfo world;
         TileFetchTiming timing;
         TileMeshPtr tile;
+        std::int32_t spawnSearchAttempts{};
         std::string error;
     };
 

@@ -52,6 +52,7 @@ void unpack_rgba8(const std::uint32_t packed, std::uint8_t* destination) noexcep
 
 godot::Ref<godot::ArrayMesh> make_array_mesh(const TileMesh& tile) {
     if (tile.vertices.empty() || tile.indices.empty()
+        || tile.indices.size() % 3U != 0U
         || !fits_godot_array(tile.vertices.size()) || !fits_godot_array(tile.indices.size())) {
         return {};
     }
@@ -87,8 +88,14 @@ godot::Ref<godot::ArrayMesh> make_array_mesh(const TileMesh& tile) {
     }
 
     auto* index_data = indices.ptrw();
-    std::transform(tile.indices.begin(), tile.indices.end(), index_data,
-        [](const std::uint32_t index) { return static_cast<std::int32_t>(index); });
+    for (std::size_t index = 0; index < tile.indices.size(); index += 3U) {
+        // The shared native mesh is counter-clockwise when viewed from above.
+        // Godot defines clockwise triangle winding as front-facing, so reverse
+        // each triangle at the adapter boundary instead of mutating core data.
+        index_data[index] = static_cast<std::int32_t>(tile.indices[index]);
+        index_data[index + 1U] = static_cast<std::int32_t>(tile.indices[index + 2U]);
+        index_data[index + 2U] = static_cast<std::int32_t>(tile.indices[index + 1U]);
+    }
 
     godot::Array arrays;
     arrays.resize(godot::Mesh::ARRAY_MAX);

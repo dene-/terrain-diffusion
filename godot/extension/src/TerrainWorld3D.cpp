@@ -16,9 +16,62 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
+#include <random>
 #include <utility>
 
 namespace terrain::godot_adapter {
+namespace {
+
+[[nodiscard]] std::optional<glm::dvec2> find_walkable_location(
+    const RawTile& tile,
+    const TerrainMetricConfig& metrics) {
+    const auto visible_width = tile.width - tile.borderSamples * 2;
+    const auto visible_height = tile.height - tile.borderSamples * 2;
+    if (visible_width < 3 || visible_height < 3 || tile.elevations.empty()) return std::nullopt;
+
+    const auto raw_index = [&tile](const std::int32_t x, const std::int32_t z) {
+        return static_cast<std::size_t>(
+            (z + tile.borderSamples) * tile.width + x + tile.borderSamples);
+    };
+    const auto elevation_scale = static_cast<double>(metrics.elevationMetersPerSourceUnit)
+        * static_cast<double>(metrics.verticalExaggeration);
+    const auto derivative_span = tile.spec.spacing
+        * static_cast<double>(metrics.metersPerWorldUnit) * 2.0;
+    const auto center_x = static_cast<double>(visible_width - 1) * 0.5;
+    const auto center_z = static_cast<double>(visible_height - 1) * 0.5;
+    double best_score = std::numeric_limits<double>::infinity();
+    std::optional<glm::dvec2> best;
+
+    for (std::int32_t z = 1; z < visible_height - 1; ++z) {
+        for (std::int32_t x = 1; x < visible_width - 1; ++x) {
+            const auto elevation = static_cast<double>(tile.elevations[raw_index(x, z)])
+                * elevation_scale;
+            if (elevation <= 8.0) continue;
+
+            const auto dx = static_cast<double>(tile.elevations[raw_index(x + 1, z)]
+                - tile.elevations[raw_index(x - 1, z)]) * elevation_scale;
+            const auto dz = static_cast<double>(tile.elevations[raw_index(x, z + 1)]
+                - tile.elevations[raw_index(x, z - 1)]) * elevation_scale;
+            const auto normal_y = derivative_span
+                / std::sqrt(dx * dx + derivative_span * derivative_span + dz * dz);
+            if (normal_y < 0.90) continue;
+
+            const auto score = std::hypot(
+                static_cast<double>(x) - center_x,
+                static_cast<double>(z) - center_z);
+            if (score >= best_score) continue;
+            best_score = score;
+            best = tile.origin + glm::dvec2{
+                static_cast<double>(x) * tile.spec.spacing,
+                static_cast<double>(z) * tile.spec.spacing,
+            };
+        }
+    }
+    return best;
+}
+
+} // namespace
 
 void TerrainWorld3D::_bind_methods() {
     using godot::ClassDB;
@@ -163,7 +216,7 @@ void TerrainWorld3D::start_initial_load() {
             constexpr std::int32_t detailed_scale = 8;
             constexpr std::int32_t segments = 128;
             const auto spacing = static_cast<double>(result.world.nativeResolution) / detailed_scale;
-            const LodSpec spec{
+            const LodSpec detailed_spec{
                 .level = 0,
                 .source = TileSource::Detailed,
                 .segments = segments,
@@ -177,13 +230,49 @@ void TerrainWorld3D::start_initial_load() {
                 .castsShadow = true,
                 .vegetation = true,
             };
+            const LodSpec locator_spec{
+                .level = 6,
+                .source = TileSource::Latent,
+                .segments = segments,
+                .scale = 1,
+                .stride = 1,
+                .spacing = static_cast<double>(result.world.latentResolution),
+                .tileWorldSize = static_cast<double>(result.world.latentResolution) * segments,
+                .innerRadius = 0.0,
+                .outerRadius = 0.0,
+                .tileRadius = 0,
+                .castsShadow = false,
+                .vegetation = false,
+            };
             std::uint64_t seed{};
             try {
                 seed = std::stoull(result.world.seed);
             } catch (...) {
                 seed = static_cast<std::uint64_t>(std::hash<std::string>{}(result.world.seed));
             }
-            auto raw = client.fetchTile(TileKey{0, 0, 0}, spec, result.world, seed, &result.timing);
+
+            TileKey detailed_key{0, 0, 0};
+            std::mt19937_64 random{seed};
+            std::uniform_int_distribution<std::int64_t> locator_coordinate{-7, 7};
+            constexpr std::int32_t maximum_locator_attempts = 9;
+            for (std::int32_t attempt = 0; attempt < maximum_locator_attempts; ++attempt) {
+                const auto locator_key = attempt == 0
+                    ? TileKey{locator_spec.level, 0, 0}
+                    : TileKey{locator_spec.level, locator_coordinate(random), locator_coordinate(random)};
+                auto locator_tile = client.fetchTile(
+                    locator_key, locator_spec, result.world, seed, nullptr);
+                ++result.spawnSearchAttempts;
+                const auto location = find_walkable_location(locator_tile, visuals.metrics);
+                if (!location) continue;
+                detailed_key.x = static_cast<std::int64_t>(
+                    std::floor(location->x / detailed_spec.tileWorldSize));
+                detailed_key.z = static_cast<std::int64_t>(
+                    std::floor(location->y / detailed_spec.tileWorldSize));
+                break;
+            }
+
+            auto raw = client.fetchTile(
+                detailed_key, detailed_spec, result.world, seed, &result.timing);
             if (stop_token.stop_requested()) return;
             result.tile = buildTerrainMesh(std::move(raw), seed, visuals);
         } catch (const std::exception& exception) {
@@ -228,7 +317,9 @@ void TerrainWorld3D::install_initial_tile(LoadResult result) {
     }
 
     auto* tile_node = memnew(godot::MeshInstance3D);
-    tile_node->set_name("Tile_L0_0_0");
+    const auto tile_key = result.tile->raw.key;
+    tile_node->set_name(godot::String{"Tile_L0_"}
+        + godot::String::num_int64(tile_key.x) + "_" + godot::String::num_int64(tile_key.z));
     tile_node->set_mesh(mesh);
     tile_node->set_cast_shadows_setting(godot::GeometryInstance3D::SHADOW_CASTING_SETTING_ON);
     tile_node->set_position({
@@ -243,7 +334,10 @@ void TerrainWorld3D::install_initial_tile(LoadResult result) {
     const auto visible_height = result.tile->raw.height - result.tile->raw.borderSamples * 2;
     const auto center_x = static_cast<double>(visible_width - 1) * 0.5;
     const auto center_z = static_cast<double>(visible_height - 1) * 0.5;
-    std::size_t spawn_index{};
+    const auto center_sample_x = visible_width / 2;
+    const auto center_sample_z = visible_height / 2;
+    std::size_t spawn_index = static_cast<std::size_t>(
+        center_sample_z * visible_width + center_sample_x);
     double spawn_score = std::numeric_limits<double>::infinity();
     for (std::int32_t z = 0; z < visible_height; ++z) {
         for (std::int32_t x = 0; x < visible_width; ++x) {
@@ -257,28 +351,34 @@ void TerrainWorld3D::install_initial_tile(LoadResult result) {
             }
         }
     }
-    if (spawn_score < std::numeric_limits<double>::infinity()) {
-        if (auto* player = godot::Object::cast_to<godot::Node3D>(
-                get_node_or_null(godot::NodePath{"../../Player"})); player != nullptr) {
-            const auto& spawn = result.tile->vertices[spawn_index].position;
-            player->set_global_position({
-                static_cast<godot::real_t>(result.tile->raw.origin.x) + spawn.x,
-                spawn.y + 0.05F,
-                static_cast<godot::real_t>(result.tile->raw.origin.y) + spawn.z,
-            });
-        }
+    const auto used_walkable_spawn = spawn_score < std::numeric_limits<double>::infinity();
+    const auto& spawn = result.tile->vertices[spawn_index].position;
+    const auto spawn_world = godot::Vector3{
+        static_cast<godot::real_t>(result.tile->raw.origin.x) + spawn.x,
+        spawn.y + 0.05F,
+        static_cast<godot::real_t>(result.tile->raw.origin.y) + spawn.z,
+    };
+    if (auto* player = godot::Object::cast_to<godot::Node3D>(
+            get_node_or_null(godot::NodePath{"../../Player"})); player != nullptr) {
+        player->set_global_position(spawn_world);
     }
 
     loaded_tile_ = std::move(result.tile);
     resident_tile_count_ = 1;
     set_status("terrain_ready");
     emit_signal("world_info_ready", godot::String{result.world.seed.c_str()});
-    emit_signal("terrain_event", "added", "0:0:0");
+    const auto tile_key_text = godot::String::num_int64(tile_key.level) + ":"
+        + godot::String::num_int64(tile_key.x) + ":" + godot::String::num_int64(tile_key.z);
+    emit_signal("terrain_event", "added", tile_key_text);
     godot::UtilityFunctions::print(
         "[TerrainWorld3D] Initial tile ready; seed=", godot::String{result.world.seed.c_str()},
+        ", tile=", tile_key_text,
+        ", locator_attempts=", result.spawnSearchAttempts,
         ", spacing=", loaded_tile_->raw.spec.spacing,
         " m, extent=", loaded_tile_->raw.spec.tileWorldSize,
         " m, vertices=", static_cast<std::int64_t>(loaded_tile_->vertices.size()),
+        ", spawn=", used_walkable_spawn ? "walkable" : "center-fallback",
+        " at ", spawn_world,
         ", request=", result.timing.requestMilliseconds,
         " ms, decode=", result.timing.decodeMilliseconds, " ms");
 }
