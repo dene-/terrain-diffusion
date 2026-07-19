@@ -4,6 +4,7 @@
 
 #include <terrain/TerrainMesh.hpp>
 
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/geometry_instance3d.hpp>
 #include <godot_cpp/classes/label.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
@@ -76,6 +77,11 @@ TerrainWorld3D::~TerrainWorld3D() {
 }
 
 void TerrainWorld3D::_ready() {
+    if (godot::Engine::get_singleton()->is_editor_hint()) {
+        set_process(false);
+        return;
+    }
+
     godot::UtilityFunctions::print(
         "[TerrainWorld3D] GDExtension ready; server=", server_url_,
         ", streaming=", streaming_enabled_);
@@ -84,6 +90,8 @@ void TerrainWorld3D::_ready() {
 }
 
 void TerrainWorld3D::_process(const double delta) {
+    if (godot::Engine::get_singleton()->is_editor_hint()) return;
+
     static_cast<void>(delta);
     std::optional<LoadResult> result;
     {
@@ -105,7 +113,10 @@ godot::String TerrainWorld3D::get_server_url() const {
 
 void TerrainWorld3D::set_streaming_enabled(const bool value) {
     streaming_enabled_ = value;
-    if (value && is_inside_tree() && !load_started_) start_initial_load();
+    if (value && is_inside_tree() && !load_started_
+        && !godot::Engine::get_singleton()->is_editor_hint()) {
+        start_initial_load();
+    }
 }
 
 bool TerrainWorld3D::is_streaming_enabled() const noexcept {
@@ -133,7 +144,7 @@ std::int64_t TerrainWorld3D::get_pending_tile_count() const noexcept {
 }
 
 void TerrainWorld3D::start_initial_load() {
-    if (load_started_) return;
+    if (load_started_ || godot::Engine::get_singleton()->is_editor_hint()) return;
     load_started_ = true;
     pending_tile_count_ = 1;
     set_status("discovering_world");

@@ -1,5 +1,6 @@
 #include "PlayerController.hpp"
 
+#include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/input.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
 #include <godot_cpp/classes/input_event_mouse_button.hpp>
@@ -46,6 +47,12 @@ void PlayerController::_bind_methods() {
 }
 
 void PlayerController::_ready() {
+    if (godot::Engine::get_singleton()->is_editor_hint()) {
+        set_physics_process(false);
+        set_process_unhandled_input(false);
+        return;
+    }
+
     camera_ = godot::Object::cast_to<godot::Camera3D>(
         get_node_or_null(godot::NodePath{"Camera3D"}));
     aim_label_ = godot::Object::cast_to<godot::Label>(
@@ -54,6 +61,8 @@ void PlayerController::_ready() {
 }
 
 void PlayerController::_physics_process(const double delta) {
+    if (godot::Engine::get_singleton()->is_editor_hint()) return;
+
     auto* input = godot::Input::get_singleton();
     if (input->is_action_just_pressed("toggle_flight")) {
         flying_ = !flying_;
@@ -91,6 +100,8 @@ void PlayerController::_physics_process(const double delta) {
 }
 
 void PlayerController::_unhandled_input(const godot::Ref<godot::InputEvent>& event) {
+    if (godot::Engine::get_singleton()->is_editor_hint()) return;
+
     auto* input = godot::Input::get_singleton();
     const godot::Ref<godot::InputEventMouseMotion> motion = event;
     if (motion.is_valid() && input->get_mouse_mode() == godot::Input::MOUSE_MODE_CAPTURED) {

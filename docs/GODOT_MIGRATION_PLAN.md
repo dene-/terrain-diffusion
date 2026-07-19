@@ -477,6 +477,16 @@ sample spacing with 17,153 vertices; the request took 54.3 ms and detailed-page
 decode/cache preparation took 222.8 ms. Visual grounding remains marked for
 manual validation.
 
+### 2026-07-19 - editor/runtime lifecycle separation
+
+Godot instantiates GDExtension scene nodes while editing the scene. Runtime
+player polling consequently queried the editor InputMap and emitted repeated
+missing-action errors, while the player's `_ready()` captured the editor
+cursor. `PlayerController` and `TerrainWorld3D` now explicitly disable runtime
+processing, input capture, and terrain requests under `Engine::is_editor_hint()`.
+Editor-mode diagnostics are clean, while a separate game-mode run still loads
+the deterministic scale-8 tile normally.
+
 ### 2026-07-19 - skill selection
 
 Install the widely adopted, fully audited `godot-gdscript-patterns` skill for
