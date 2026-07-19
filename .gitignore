@@ -208,7 +208,7 @@ cmake-build-*/
 native/build/
 godot/.godot/
 godot/bin/*
-godot/extension/build/
+godot/extension/build*/
 
 # Mongo Explorer plugin
 .idea/**/mongoSettings.xml

@@ -232,22 +232,22 @@ Exit criteria:
 
 ## Milestone 4 - streaming, LOD, floating origin and cache
 
-- [ ] Connect `TerrainStreamer` to `TerrainWorld3D` update ticks.
-- [ ] Create one Godot mesh node/resource per resident render tile, not per
+- [x] Connect `TerrainStreamer` to `TerrainWorld3D` update ticks.
+- [x] Create one Godot mesh node/resource per resident render tile, not per
   source page.
-- [ ] Preserve parent visibility until the complete required child coverage is
+- [x] Preserve parent visibility until the complete required child coverage is
   GPU-ready.
-- [ ] Prevent simultaneous parent/child depth overlap.
-- [ ] Preserve refine/coarsen hysteresis and camera/travel-direction priority.
-- [ ] Treat the 4096 x 4096 scale-8 page as a CPU source cache and extract
+- [x] Prevent simultaneous parent/child depth overlap.
+- [x] Preserve refine/coarsen hysteresis and camera/travel-direction priority.
+- [x] Treat the 4096 x 4096 scale-8 page as a CPU source cache and extract
   segment meshes on demand.
-- [ ] Make cache-hit restoration avoid network and derivative recomputation.
-- [ ] Apply absolute-double to camera-relative-float transforms consistently to
+- [x] Make cache-hit restoration avoid network and derivative recomputation.
+- [~] Apply absolute-double to camera-relative-float transforms consistently to
   terrain, player, vegetation, water, clouds, shadows, and debug overlays.
-- [ ] Rebase the Godot scene origin without changing authoritative C++ world
+- [~] Rebase the Godot scene origin without changing authoritative C++ world
   coordinates.
-- [ ] Add bounded upload count and byte budgets per frame.
-- [ ] Add event-driven diagnostics for gaps, overlaps, stale work, and slow
+- [x] Add bounded upload count and byte budgets per frame.
+- [~] Add event-driven diagnostics for gaps, overlaps, stale work, and slow
   cache restores.
 - [M] Validate eye-level travel, high-speed flight, revisits, and seed changes.
 
@@ -414,10 +414,12 @@ assumed correct.
 ## Current next action
 
 **Milestone 4:** connect the shared `TerrainStreamer` to `TerrainWorld3D` and
-replace the one-tile bootstrap with readiness-aware resident render tiles. The
-one-tile scale, orientation, normals, and dry-land grounding are now visually
-confirmed; mouse-look and movement remain a user manual checkpoint while the
-streaming integration proceeds.
+finish the floating-origin contract for every subsequently added Godot system.
+Terrain and player now use absolute-double streaming coordinates with local
+float transforms; vegetation, water, atmosphere/clouds, shadows, and HUD
+coordinates must adopt the same origin before their milestones can close.
+High-speed travel, rebasing, revisits, and mouse controls remain user manual
+checkpoints.
 
 ## Decision log
 
@@ -501,6 +503,22 @@ containing scale-8 detailed tile. No latent/coarse geometry is displayed and a
 center-grounded fallback remains available if no dry candidate is found. A
 Godot movie capture visually confirmed tile `0:24:48` at 3.75 m spacing with a
 walkable spawn at 76 m elevation.
+
+### 2026-07-19 - shared streamer drives Godot resident terrain
+
+`TerrainWorld3D` now owns the shared `TerrainStreamer`, updates it from the
+player's absolute position and camera direction, and drains ready events under
+the configured upload-count and upload-byte budgets. Each resident render tile
+owns one Godot `ArrayMesh` node; L0 alone creates collision. The bootstrap
+`TerrainClient` is moved into the streamer so its 4096 x 4096 scale-8 page
+cache survives startup, and dormant resident nodes remain available for
+network-free, derivation-free revisits until the core eviction policy removes
+them. Per-instance shader parameters implement the native readiness-aware LOD
+rings: coarse parents fill missing child coverage and are excluded only as a
+proven child footprint grows. Terrain material sampling remains anchored to
+absolute coordinates across 4 km floating-origin rebases. A fresh Godot movie
+capture installed 118 L0-L3 tiles without runtime errors or a visible square
+coverage boundary; movement/rebase behavior remains a manual checkpoint.
 
 ### 2026-07-19 - skill selection
 
