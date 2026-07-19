@@ -29,3 +29,33 @@ def parse_kwargs(kwargs_tuple):
             result[key] = value
     return result
 
+
+def apply_performance_preset(
+    preset: str | None,
+    *,
+    device: str | None,
+    batch_size: str | None,
+    cache_size: str | None,
+    dtype: str | None,
+    extra_kwargs,
+    default_batch_size: str,
+    default_cache_size: str,
+):
+    """Resolve inference defaults, allowing explicit CLI values to win."""
+    kwargs = parse_kwargs(extra_kwargs)
+
+    if preset == "mps":
+        device = device or "mps"
+        batch_size = batch_size or "8"
+        cache_size = cache_size or "2G"
+        dtype = dtype or "fp16"
+        kwargs.setdefault("decoder_tile_size", 768)
+        kwargs.setdefault("decoder_tile_stride", 640)
+
+    return (
+        device,
+        batch_size or default_batch_size,
+        cache_size or default_cache_size,
+        dtype or "fp32",
+        kwargs,
+    )

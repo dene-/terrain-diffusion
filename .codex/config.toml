@@ -1,0 +1,5 @@
+# Project-local MCP configuration. Enable after godot/project.godot exists.
+[mcp_servers.godot-forge]
+command = "npx"
+args = ["-y", "godot-forge@0.1.4", "--project", "godot"]
+enabled = false

@@ -19,7 +19,8 @@ from pathlib import Path
 from rasterio.transform import Affine
 from tqdm import tqdm
 
-from terrain_diffusion.common.cli_helpers import parse_cache_size
+from terrain_diffusion.common.device import select_device
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, resolve_hdf5_path
 
 PADDING = 64
@@ -68,25 +69,34 @@ def _load_and_pad(path: Path, channel: int, internal_scale: float, default_value
     default="0.2,0.2,1.0,0.2,1.0"
 )
 @click.option("--hdf5-file", default=None, help="HDF5 cache file ('TEMP' for temporary)")
-@click.option("--cache-size", default="1G", help="Cache size for direct caching (e.g. 100M, 1G)")
+@click.option("--cache-size", default=None, help="Cache size (default: 1G; MPS preset: 2G)")
 @click.option("--seed", type=int, default=None)
-@click.option("--device", default=None, help="Device (cuda/cpu, default: auto)")
-@click.option("--batch-size", default="1,2,4,8,16")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None, help="Device (default: auto)")
+@click.option("--batch-size", default=None, help="Latent batch size (default: 1,2,4,8,16; MPS preset: 8)")
 @click.option("--compile/--no-compile", "torch_compile", default=True)
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct")
 @click.option("--chunk-size", type=int, default=8 * PIXELS_PER_CELL, help="Max query size in output pixels (must be a multiple of 256). Larger values allow bigger batches.")
+@click.option("--kwarg", "extra_kwargs", multiple=True, help="Additional key=value pipeline arguments")
 def main(tiff_dir, output, model_path, snr, hdf5_file, cache_size, seed, device,
-         batch_size, torch_compile, dtype, caching_strategy, chunk_size):
+         batch_size, torch_compile, dtype, performance_preset, caching_strategy, chunk_size, extra_kwargs):
     """Generate terrain from conditioning TIFFs and export to GeoTIFF."""
     tiff_dir = Path(tiff_dir)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cpu":
-            print("Warning: Using CPU (CUDA not available).")
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,2,4,8,16",
+        default_cache_size="1G",
+    )
+    device = select_device(device)
 
     batch_sizes = [int(x) for x in batch_size.split(",")] if "," in batch_size else int(batch_size)
     if dtype == "fp32":
@@ -100,6 +110,7 @@ def main(tiff_dir, output, model_path, snr, hdf5_file, cache_size, seed, device,
         dtype=dtype,
         caching_strategy=caching_strategy,
         cache_limit=parse_cache_size(cache_size),
+        **kwargs,
     )
     world.to(device)
 

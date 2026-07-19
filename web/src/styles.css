@@ -1,0 +1,256 @@
+:root {
+  color: #f4f5f2;
+  background: #0e1418;
+  font-family: "SFMono-Regular", "Roboto Mono", Consolas, monospace;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root,
+.game-shell,
+.viewport {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  user-select: none;
+}
+
+.viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 85%);
+}
+
+.hud::after {
+  position: absolute;
+  inset: auto 0 0;
+  height: 18rem;
+  background: linear-gradient(transparent, rgb(4 9 11 / 32%));
+  content: "";
+  pointer-events: none;
+}
+
+.brand,
+.coordinates,
+.controls {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  line-height: 1.65;
+  text-transform: uppercase;
+}
+
+.brand {
+  top: 1.5rem;
+  left: 1.6rem;
+  flex-direction: column;
+}
+
+.brand strong {
+  font-size: 0.83rem;
+  letter-spacing: 0.12em;
+}
+
+.brand span,
+.coordinates span:first-child {
+  color: rgb(244 245 242 / 67%);
+}
+
+.coordinates {
+  right: 1.6rem;
+  bottom: 1.65rem;
+  align-items: flex-end;
+  flex-direction: column;
+}
+
+.controls {
+  bottom: 1.65rem;
+  left: 1.6rem;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.15rem;
+  max-width: min(34rem, 55vw);
+}
+
+.rangefinder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1px;
+  height: 1px;
+  color: rgb(255 255 255 / 92%);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 90%);
+  transform: translate(-50%, -50%);
+}
+
+.crosshair {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 90%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 42%);
+  transform: translate(-50%, -50%);
+}
+
+.rangefinder output {
+  position: absolute;
+  top: 0.65rem;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.enter-world {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  min-width: 15rem;
+  padding: 0.8rem 1.1rem;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 2px;
+  color: inherit;
+  background: rgb(6 12 15 / 58%);
+  backdrop-filter: blur(5px);
+  cursor: pointer;
+  flex-direction: column;
+  font: inherit;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  text-align: center;
+  text-shadow: inherit;
+  text-transform: uppercase;
+  transform: translate(-50%, -50%);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.enter-world:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / 62%);
+  background: rgb(6 12 15 / 72%);
+}
+
+.enter-world:disabled {
+  cursor: wait;
+}
+
+.enter-world strong {
+  font-size: 0.75rem;
+}
+
+.enter-world span {
+  margin-top: 0.28rem;
+  color: rgb(244 245 242 / 62%);
+  font-size: 0.58rem;
+  letter-spacing: 0.03em;
+  text-transform: none;
+}
+
+.random-terrain {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.6rem;
+  z-index: 2;
+  display: flex;
+  padding: 0.48rem 0.58rem 0.48rem 0.7rem;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 2px;
+  align-items: center;
+  gap: 0.75rem;
+  color: inherit;
+  background: rgb(6 12 15 / 38%);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  text-shadow: inherit;
+  text-transform: uppercase;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.random-terrain:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / 58%);
+  background: rgb(6 12 15 / 68%);
+}
+
+.random-terrain:disabled {
+  color: rgb(244 245 242 / 48%);
+  cursor: wait;
+}
+
+.random-terrain kbd {
+  min-width: 1.35rem;
+  padding: 0.12rem 0.28rem;
+  border: 1px solid rgb(255 255 255 / 25%);
+  border-radius: 2px;
+  background: rgb(255 255 255 / 6%);
+  font: inherit;
+  text-align: center;
+}
+
+.stream-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  height: 2px;
+  background: rgb(255 255 255 / 10%);
+}
+
+.stream-progress div {
+  width: 100%;
+  height: 100%;
+  background: rgb(245 246 241 / 80%);
+  transform-origin: left;
+  transition: transform 200ms ease;
+}
+
+@media (max-width: 720px) {
+  .brand {
+    top: 1rem;
+    left: 1rem;
+  }
+
+  .random-terrain {
+    top: 1rem;
+    right: 1rem;
+  }
+
+  .coordinates {
+    right: 1rem;
+    bottom: 1.2rem;
+  }
+
+  .controls {
+    bottom: 4.1rem;
+    left: 1rem;
+    max-width: calc(100vw - 2rem);
+  }
+}

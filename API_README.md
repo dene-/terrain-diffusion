@@ -5,46 +5,35 @@ Flask-based REST API for serving terrain and climate data from the terrain diffu
 ## Starting the Server
 
 ```bash
-python -m terrain_diffusion.inference.api --hdf5-file world.h5 --port 8000
+uv run python -m terrain_diffusion api xandergos/terrain-diffusion-30m --port 8000
 ```
 
 ### Configuration Options
 
-- `--hdf5-file`: Path to HDF5 file (default: `world.h5`, use `TEMP` for temporary file)
+- `model_path`: Hugging Face model name or local model path
+- `--performance-preset mps`: Apple Silicon MPS, FP16, batching, and larger cache preset
+- `--hdf5-file`: Optional HDF5 cache path
 - `--port`: Server port (default: 8000, or `PORT` env var)
 - `--host`: Server host (default: `0.0.0.0`)
 - `--seed`: Random seed (default: from file or random)
-- `--device`: Device (`cuda`/`cpu`, default: auto-detect, or `TERRAIN_DEVICE` env var)
-- `--drop-water-pct`: Drop water percentage (default: 0.5)
-- `--frequency-mult`: Frequency multipliers as JSON array (default: `[1.0, 1.0, 1.0, 1.0, 1.0]`)
-- `--cond-snr`: Conditioning SNR as JSON array (default: `[0.5, 0.5, 0.5, 0.5, 0.5]`)
-- `--histogram-raw`: Pre-softmax beauty histogram values as JSON array (default: `[0.0, 0.0, 0.0, 1.0, 1.5]`)
-- `--latents-batch-size`: Batch size for latent generation (default: 4)
+- `--device`: Device (`cuda`, `mps`, or `cpu`; default: auto-detect)
+- `--batch-size`: Latent generation batch size
+- `--cache-size`: Direct cache size such as `2G`
 - `--log-mode`: Logging mode (`info` or `verbose`, default: `verbose`)
+- `--kwarg key=value`: Additional pipeline option, repeatable
 
-## `GET /seed`
+## `GET /health`
 
-Return the current world seed.
+Returns `{"status":"ok"}` once the HTTP process is available.
 
-**Response:**
-```json
-{"seed": 123456789}
-```
+## `GET /world`
 
-## `POST /seed`
-
-Change the world seed at runtime. This clears all cached terrain and rebuilds the generation pipeline with the new seed.
-
-**Request Body (JSON, optional):**
-```json
-{"seed": 123456789}
-```
-
-Omit the body or pass `{}` to generate a random seed.
+Return the active world seed plus native, latent and continental-stage horizontal
+resolutions in metres.
 
 **Response:**
 ```json
-{"seed": 123456789}
+{"seed": "123456789", "native_resolution": 30, "latent_resolution": 240, "coarse_resolution": 11520}
 ```
 
 ## `GET /terrain`
@@ -53,11 +42,10 @@ Get terrain elevation and climate data for a bounding box.
 
 **Query Parameters:**
 - `i1`, `j1`, `i2`, `j2`: Bounding box coordinates in target resolution (required)
-- `scale`: Integer scale factor relative to 90m resolution (default: 1)
-  - `1` = 90m per pixel
-  - `2` = 45m per pixel
-  - `4` = 22.5m per pixel
-  - `8` = 11.25m per pixel
+- `scale`: Integer upsampling factor relative to the selected model's native resolution
+  (default: 1). For the 30m model, `scale=4` returns samples 7.5m apart.
+- `climate`: Set to `0` to omit climate data and reduce interactive terrain latency
+- `seed`: Optional integer world seed
 
 **Example:**
 ```
@@ -86,6 +74,21 @@ Binary data with:
 ```json
 {"error": "error message"}
 ```
+
+## `GET /terrain/lod`
+
+Return a decimated elevation tile from the generated latent elevation field used by the
+detailed decoder. Coordinates are latent-grid indices. `stride` selects progressively
+lower-density far LODs from the same field and may range from 1 through 64. The binary
+layout and response headers are identical to the elevation portion of `GET /terrain`.
+
+## `GET /terrain/orbital`
+
+Return planet-scale elevation and climate from Terrain Diffusion's generated continental
+stage. Coordinates are continental-grid indices and `stride` may range from 1 through 16.
+The response uses the same interleaved elevation/climate binary layout as `GET /terrain`.
+This endpoint supplies geometry only after detailed latent relief becomes smaller than a
+screen pixel; it is not used for playable terrain or collision.
 
 ## Usage Example
 

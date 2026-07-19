@@ -7,8 +7,9 @@ import numpy as np
 import torch
 from flask import Flask, Response, jsonify, request
 
+from terrain_diffusion.common.device import select_device
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, resolve_hdf5_path
-from terrain_diffusion.common.cli_helpers import parse_kwargs, parse_cache_size
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 
 app = Flask(__name__)
 
@@ -17,13 +18,7 @@ _PIPELINE_CONFIG: dict = {}
 
 
 def _select_device() -> str:
-    env_device = os.getenv("TERRAIN_DEVICE")
-    if env_device:
-        return env_device
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    if dev == "cpu":
-        print("Warning: Using CPU (CUDA not available).")
-    return dev
+    return select_device()
 
 
 def _get_pipeline() -> WorldPipeline:
@@ -42,6 +37,7 @@ def _get_pipeline() -> WorldPipeline:
         torch_compile=cfg.get('torch_compile', False),
         dtype=cfg.get('dtype'),
         caching_strategy=caching_strategy,
+        cache_limit=cfg.get('cache_limit', 100 * 1024 * 1024),
         **cfg.get('kwargs', {}),
     )
     _PIPELINE.to(device)
@@ -100,7 +96,15 @@ def _binary_response(elev: torch.Tensor, climate: Optional[torch.Tensor]) -> Res
     return resp
 
 
-def _get_terrain(world: WorldPipeline, i1: int, j1: int, i2: int, j2: int, scale: int) -> dict:
+def _get_terrain(
+    world: WorldPipeline,
+    i1: int,
+    j1: int,
+    i2: int,
+    j2: int,
+    scale: int,
+    with_climate: bool = True,
+) -> dict:
     """
     Get terrain data at arbitrary scale.
     
@@ -113,7 +117,7 @@ def _get_terrain(world: WorldPipeline, i1: int, j1: int, i2: int, j2: int, scale
     """
     if scale == 1:
         # Native - just fetch directly
-        out = world.get(i1, j1, i2, j2, with_climate=True)
+        out = world.get(i1, j1, i2, j2, with_climate=with_climate)
         return {"elev": out["elev"], "climate": out.get("climate")}
 
     # Convert target coordinates to native resolution space
@@ -128,7 +132,13 @@ def _get_terrain(world: WorldPipeline, i1: int, j1: int, i2: int, j2: int, scale
     i2_native_pad = i2_native + 1
     j2_native_pad = j2_native + 1
 
-    out_native = world.get(i1_native_pad, j1_native_pad, i2_native_pad, j2_native_pad, with_climate=True)
+    out_native = world.get(
+        i1_native_pad,
+        j1_native_pad,
+        i2_native_pad,
+        j2_native_pad,
+        with_climate=with_climate,
+    )
     elev_native = out_native["elev"]
     climate_native = out_native.get("climate")
 
@@ -166,9 +176,102 @@ def _get_terrain(world: WorldPipeline, i1: int, j1: int, i2: int, j2: int, scale
     return {"elev": elev, "climate": climate}
 
 
+def _get_latent_terrain(
+    world: WorldPipeline,
+    i1: int,
+    j1: int,
+    i2: int,
+    j2: int,
+    stride: int,
+) -> dict:
+    """Read Terrain Diffusion's generated low-frequency elevation field.
+
+    Coordinates are in latent pixels. Each latent pixel represents
+    ``native_resolution * latent_compression`` metres. Unlike ``world.coarse``,
+    this is the elevation component used by the detailed decoder itself.
+    """
+    weighted = world.latents[:, i1:i2, j1:j2]
+    values = weighted[:-1] / (weighted[-1:] + 1e-8)
+    elevation_sqrt = values[4] * 38.6 - 31.4
+    elevation = torch.sign(elevation_sqrt) * torch.square(elevation_sqrt)
+    return {"elev": _feature_preserving_decimate(elevation, stride), "climate": None}
+
+
+def _feature_preserving_decimate(field: torch.Tensor, stride: int) -> torch.Tensor:
+    """Reduce a generated field without erasing its strongest landforms.
+
+    The mean keeps adjacent globally aligned blocks continuous. A bounded
+    offset toward whichever local extreme differs most from that mean retains
+    important ridges, valleys and coastlines better than point sampling while
+    remaining strictly inside the source block's value range.
+    """
+    if stride == 1:
+        return field
+    source = field.unsqueeze(0).unsqueeze(0)
+    average = torch.nn.functional.avg_pool2d(
+        source, kernel_size=stride, stride=stride, ceil_mode=True,
+        count_include_pad=False,
+    )
+    maximum = torch.nn.functional.max_pool2d(
+        source, kernel_size=stride, stride=stride, ceil_mode=True,
+    )
+    minimum = -torch.nn.functional.max_pool2d(
+        -source, kernel_size=stride, stride=stride, ceil_mode=True,
+    )
+    high_delta = maximum - average
+    low_delta = minimum - average
+    strongest_delta = torch.where(high_delta >= -low_delta, high_delta, low_delta)
+    return (average + strongest_delta * 0.28).squeeze(0).squeeze(0)
+
+
+def _average_decimate(field: torch.Tensor, stride: int) -> torch.Tensor:
+    if stride == 1:
+        return field
+    return torch.nn.functional.avg_pool2d(
+        field.unsqueeze(0), kernel_size=stride, stride=stride,
+        ceil_mode=True, count_include_pad=False,
+    ).squeeze(0)
+
+
+def _get_orbital_terrain(
+    world: WorldPipeline,
+    i1: int,
+    j1: int,
+    i2: int,
+    j2: int,
+    stride: int,
+) -> dict:
+    """Read the generated continental stage for planet-scale geometry.
+
+    One coarse cell spans 48 latent pixels. This stage is deliberately used
+    only beyond the detailed latent rings, where sub-kilometre relief is below
+    a screen pixel but coherent continents and climate must remain visible.
+    """
+    weighted = world.coarse[:, i1:i2, j1:j2]
+    values = weighted[:-1] / (weighted[-1:] + 1e-8)
+    elevation_sqrt = values[0]
+    elevation = torch.sign(elevation_sqrt) * torch.square(elevation_sqrt)
+    climate = torch.stack((values[2], values[3], values[4], values[5]))
+    return {
+        "elev": _feature_preserving_decimate(elevation, stride),
+        "climate": _average_decimate(climate, stride),
+    }
+
+
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.get("/world")
+def world_info():
+    world = _get_pipeline()
+    return jsonify({
+        "seed": str(world.seed),
+        "native_resolution": world.native_resolution,
+        "latent_resolution": world.native_resolution * world.latent_compression,
+        "coarse_resolution": world.native_resolution * world.latent_compression * 48,
+    })
 
 
 @app.get("/terrain")
@@ -180,6 +283,7 @@ def terrain():
         i1, j1, i2, j2: Bounding box in target resolution coordinates
         scale: Integer scale factor relative to native resolution (default: 1)
                1 = native, 2 = 2x, 4 = 4x, 8 = 8x, etc.
+        climate: Set to 0 to omit climate channels (default: 1)
         seed: World seed (optional; changes seed when different from current)
     
     Returns binary data:
@@ -190,6 +294,7 @@ def terrain():
     try:
         i1, j1, i2, j2 = _parse_quad()
         scale = request.args.get("scale", default=1, type=int)
+        with_climate = request.args.get("climate", default=1, type=int) != 0
         if scale < 1:
             raise ValueError("scale must be >= 1")
 
@@ -197,8 +302,42 @@ def terrain():
         seed = request.args.get("seed", type=int)
         if seed is not None and world.change_seed(seed):
             print(f"World seed changed to: {world.seed}")
-        out = _get_terrain(world, i1, j1, i2, j2, scale)
+        out = _get_terrain(world, i1, j1, i2, j2, scale, with_climate=with_climate)
         return _binary_response(out["elev"], out.get("climate"))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.get("/terrain/lod")
+def latent_terrain_lod():
+    """Return decimated elevation from the detailed pipeline's latent stage."""
+    try:
+        i1, j1, i2, j2 = _parse_quad()
+        stride = request.args.get("stride", default=1, type=int)
+        if stride < 1 or stride > 64:
+            raise ValueError("stride must be between 1 and 64")
+        if i2 - i1 > 2049 or j2 - j1 > 2049:
+            raise ValueError("latent LOD source bounds may not exceed 2049 pixels per axis")
+        world = _get_pipeline()
+        out = _get_latent_terrain(world, i1, j1, i2, j2, stride)
+        return _binary_response(out["elev"], None)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.get("/terrain/orbital")
+def orbital_terrain_lod():
+    """Return climate-bearing continental geometry for orbital rendering."""
+    try:
+        i1, j1, i2, j2 = _parse_quad()
+        stride = request.args.get("stride", default=1, type=int)
+        if stride < 1 or stride > 16:
+            raise ValueError("stride must be between 1 and 16")
+        if i2 - i1 > 1025 or j2 - j1 > 1025:
+            raise ValueError("orbital LOD source bounds may not exceed 1025 pixels per axis")
+        world = _get_pipeline()
+        out = _get_orbital_terrain(world, i1, j1, i2, j2, stride)
+        return _binary_response(out["elev"], out["climate"])
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
@@ -207,23 +346,34 @@ def terrain():
 @click.argument("model_path", default="xandergos/terrain-diffusion-30m")
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct", help="Caching strategy: 'indirect' uses HDF5, 'direct' uses in-memory LRU cache")
 @click.option("--hdf5-file", default=None, help="HDF5 file path (required for indirect caching, optional for direct)")
-@click.option("--cache-size", default="100M", help="Cache size (e.g., 100M, 1G) for direct caching")
+@click.option("--cache-size", default=None, help="Cache size (default: 100M; MPS preset: 2G)")
 @click.option("--seed", type=int, default=None, help="Random seed (default: from file or random)")
-@click.option("--device", default=None, help="Device (cuda/cpu, default: auto)")
-@click.option("--batch-size", type=str, default="1,4", help="Batch size(s) for latent generation (e.g. '4' or '1,2,4,8')")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None, help="Device (default: auto)")
+@click.option("--batch-size", type=str, default=None, help="Latent batch size (default: 1,4; MPS preset: 8)")
 @click.option("--log-mode", type=click.Choice(["info", "verbose"]), default="verbose", help="Logging mode")
 @click.option("--compile/--no-compile", "torch_compile", default=True, help="Use torch.compile for faster inference")
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32", help="Model dtype")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--host", default="0.0.0.0", help="Server host")
 @click.option("--port", type=int, default=int(os.getenv("PORT", "8000")), help="Server port")
 @click.option("--kwarg", "extra_kwargs", multiple=True, help="Additional key=value kwargs (e.g. --kwarg native_resolution=30)")
-def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, torch_compile, dtype, host, port, extra_kwargs):
+def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, torch_compile, dtype, performance_preset, host, port, extra_kwargs):
     """Terrain API server"""
     global _PIPELINE_CONFIG
     if caching_strategy == 'indirect' and hdf5_file is None:
         hdf5_file = 'TEMP'
     if hdf5_file is not None:
         hdf5_file = resolve_hdf5_path(hdf5_file)
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,4",
+        default_cache_size="100M",
+    )
     # Parse batch size(s)
     if ',' in batch_size:
         batch_sizes = [int(x.strip()) for x in batch_size.split(',')]
@@ -243,7 +393,7 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batc
         'log_mode': log_mode,
         'torch_compile': torch_compile,
         'dtype': dtype,
-        'kwargs': parse_kwargs(extra_kwargs),
+        'kwargs': kwargs,
     }
     _get_pipeline()
     app.run(host=host, port=port, debug=False, threaded=False)
@@ -251,4 +401,3 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batc
 
 if __name__ == "__main__":
     main()
-

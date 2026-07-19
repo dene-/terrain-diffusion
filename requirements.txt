@@ -1,6 +1,7 @@
 accelerate>=0.34.2
 cartopy>=0.23.0
 catalogue>=2.0.10
+certifi>=2024.8.30
 click>=8.1.6
 confection>=0.1.5
 diffusers>=0.30.3

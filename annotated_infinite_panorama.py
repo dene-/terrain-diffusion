@@ -106,9 +106,19 @@ def build_timestep_ranges(all_timesteps, thresholds):
 # Main
 # -----------------------------------------------------------------------------
 def main():
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    dtype = torch.float16 if device != "cpu" else torch.float32
+
     pipe = StableDiffusionPipeline.from_pretrained(
-        "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16,
-    ).to("cuda")
+        "runwayml/stable-diffusion-v1-5", torch_dtype=dtype,
+    ).to(device)
+    if device == "mps":
+        pipe.enable_attention_slicing()
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler.set_timesteps(NUM_INFERENCE_STEPS)
 
@@ -177,21 +187,21 @@ def main():
         """Phase T-1: sample pure noise at this window column, denoise the highest-t range."""
         x = ctx[2] * LATENT_STRIDE
         noise = torch.as_tensor(tiled_gaussian_noise(SEED, x, LATENT_TILE)) * init_sigma
-        noise = noise.to(pipe.device, dtype=torch.float16).unsqueeze(0)
+        noise = noise.to(pipe.device, dtype=dtype).unsqueeze(0)
         latent = denoise(noise, phase_timesteps[0])[0].cpu().float()
         return pack(latent, latent_weight)
 
     def make_continuation_phase(timesteps):
         """Phases T-2..0: read blended tile from previous phase, denoise further."""
         def phase(ctx, prev):
-            latent = normalize(prev).to(pipe.device, dtype=torch.float16).unsqueeze(0)
+            latent = normalize(prev).to(pipe.device, dtype=dtype).unsqueeze(0)
             latent = denoise(latent, timesteps)[0].cpu().float()
             return pack(latent, latent_weight)
         return phase
 
     def decode(ctx, prev):
         """VAE-decode the fully denoised (phase 0) latent tile; re-weight for pixel blending."""
-        latent = normalize(prev).to(pipe.device, dtype=torch.float16).unsqueeze(0)
+        latent = normalize(prev).to(pipe.device, dtype=dtype).unsqueeze(0)
         latent = latent / pipe.vae.config.scaling_factor
         with torch.no_grad():
             img = pipe.vae.decode(latent).sample

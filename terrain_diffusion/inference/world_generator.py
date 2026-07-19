@@ -1,15 +1,12 @@
 import click
-import torch
+from terrain_diffusion.common.device import select_device
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, resolve_hdf5_path
-from terrain_diffusion.common.cli_helpers import parse_kwargs, parse_cache_size
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 from tqdm import tqdm
 
 
 def generate_world(model_path: str, hdf5_file: str | None = None, seed: int | None = None, coarse_window: int = 64, device: str | None = None, caching_strategy: str = 'direct', **kwargs) -> None:
-    if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if device == 'cpu':
-            print("Warning: Using CPU (CUDA not available).")
+    device = select_device(device)
 
     world = WorldPipeline.from_pretrained(model_path, seed=seed, caching_strategy=caching_strategy, **kwargs)
     world.to(device)
@@ -34,21 +31,32 @@ def generate_world(model_path: str, hdf5_file: str | None = None, seed: int | No
 @click.argument("model_path", default="xandergos/terrain-diffusion-30m")
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct", help="Caching strategy: 'indirect' uses HDF5, 'direct' uses in-memory LRU cache")
 @click.option("--hdf5-file", default=None, help="HDF5 file path (required for indirect caching, optional for direct)")
-@click.option("--cache-size", default="100M", help="Cache size (e.g., 100M, 1G) for direct caching")
+@click.option("--cache-size", default=None, help="Cache size (default: 100M; MPS preset: 2G)")
 @click.option("--seed", type=int, default=None, help="Random seed (default: random or from file)")
-@click.option("--device", default=None, help="Device (cuda/cpu, default: auto)")
-@click.option("--batch-size", type=str, default="1,2,4,8,16", help="Batch size(s) for latent generation (e.g. '4' or '1,2,4,8,16')")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None, help="Device (default: auto)")
+@click.option("--batch-size", type=str, default=None, help="Latent batch size (default: 1,2,4,8,16; MPS preset: 8)")
 @click.option("--log-mode", type=click.Choice(["info", "verbose"]), default="verbose", help="Logging mode")
 @click.option("--coarse-window", type=int, default=50, help="Coarse window size")
 @click.option("--compile/--no-compile", "torch_compile", default=True, help="Use torch.compile for faster inference")
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32", help="Model dtype")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--kwarg", "extra_kwargs", multiple=True, help="Additional key=value kwargs (e.g. --kwarg coarse_pooling=2)")
-def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, coarse_window, torch_compile, dtype, extra_kwargs):
+def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, coarse_window, torch_compile, dtype, performance_preset, extra_kwargs):
     """Generate a world using the terrain diffusion pipeline"""
     if caching_strategy == 'indirect' and hdf5_file is None:
         hdf5_file = 'TEMP'
     if hdf5_file is not None:
         hdf5_file = resolve_hdf5_path(hdf5_file)
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,2,4,8,16",
+        default_cache_size="100M",
+    )
     # Parse batch size(s)
     if ',' in batch_size:
         batch_sizes = [int(x.strip()) for x in batch_size.split(',')]
@@ -69,7 +77,7 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batc
         dtype=dtype,
         caching_strategy=caching_strategy,
         cache_limit=parse_cache_size(cache_size),
-        **parse_kwargs(extra_kwargs),
+        **kwargs,
     )
 
 

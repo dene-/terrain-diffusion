@@ -164,6 +164,7 @@ checkpoints/
 # Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
 
 # User-specific stuff
+.DS_Store
 .idea/**/workspace.xml
 .idea/**/tasks.xml
 .idea/**/usage.statistics.xml
@@ -204,6 +205,7 @@ checkpoints/
 
 # CMake
 cmake-build-*/
+native/build/
 
 # Mongo Explorer plugin
 .idea/**/mongoSettings.xml

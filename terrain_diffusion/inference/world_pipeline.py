@@ -337,7 +337,7 @@ class WorldPipeline(ConfigMixin):
             if os.name == 'nt':
                 print("WARNING: torch.compile is not currently supported on Windows. This will affect performance.")
             else:
-                print("WARNING: torch.compile is not currently supported on CPU.")
+                print("WARNING: torch.compile is only enabled for CUDA inference; disabling it.")
             self.torch_compile = False
             
         self.caching_strategy = caching_strategy

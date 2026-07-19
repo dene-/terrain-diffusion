@@ -7,9 +7,10 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
 
+from terrain_diffusion.common.device import select_device
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, normalize_tensor, resolve_hdf5_path
 from terrain_diffusion.inference.relief_map import get_relief_map
-from terrain_diffusion.common.cli_helpers import parse_kwargs, parse_cache_size
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 
 CHANNEL_NAMES = ['Elev', 'p5', 'Temp', 'T std', 'Precip', 'Precip CV']
 
@@ -131,10 +132,7 @@ def run_sampler(
     caching_strategy: str = 'direct',
     **kwargs
 ) -> None:
-    if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if device == 'cpu':
-            print("Warning: Using CPU (CUDA not available).")
+    device = select_device(device)
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -194,19 +192,31 @@ def run_sampler(
 @click.option("--detail-size", type=int, default=1024, help="Size of each detail patch in native pixels")
 @click.option("--coarse-window", type=int, default=300, help="Coarse window size for sampling")
 @click.option("--seed", type=int, default=None, help="Random seed (default: random)")
-@click.option("--device", default=None, help="Device (cuda/cpu, default: auto)")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None, help="Device (default: auto)")
 @click.option("--min-land-frac", type=float, default=0.5, help="Minimum land fraction for tile selection")
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct")
-@click.option("--cache-size", default="1G", help="Cache size for direct caching")
-@click.option("--batch-size", type=str, default="1,2,4,8,16", help="Batch size(s) for latent generation")
+@click.option("--cache-size", default=None, help="Cache size (default: 1G; MPS preset: 2G)")
+@click.option("--batch-size", type=str, default=None, help="Latent batch size (default: 1,2,4,8,16; MPS preset: 8)")
 @click.option("--compile/--no-compile", "torch_compile", default=True, help="Use torch.compile")
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32", help="Model dtype")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--kwarg", "extra_kwargs", multiple=True, help="Additional key=value kwargs")
 def main(
     model_path, output_dir, n_samples, detail_size, coarse_window, seed, device,
-    min_land_frac, caching_strategy, cache_size, batch_size, torch_compile, dtype, extra_kwargs
+    min_land_frac, caching_strategy, cache_size, batch_size, torch_compile, dtype,
+    performance_preset, extra_kwargs
 ):
     """Generate random terrain samples with debug overlays."""
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,2,4,8,16",
+        default_cache_size="1G",
+    )
     # Parse batch size(s)
     if ',' in batch_size:
         batch_sizes = [int(x.strip()) for x in batch_size.split(',')]
@@ -230,10 +240,9 @@ def main(
         latents_batch_size=batch_sizes,
         torch_compile=torch_compile,
         dtype=dtype,
-        **parse_kwargs(extra_kwargs),
+        **kwargs,
     )
 
 
 if __name__ == '__main__':
     main()
-

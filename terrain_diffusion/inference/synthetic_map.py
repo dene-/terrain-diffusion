@@ -1,6 +1,11 @@
 import os
 import random
 import json
+import shutil
+import ssl
+import urllib.request
+
+import certifi
 import numpy as np
 import rasterio
 from pyfastnoiselite.pyfastnoiselite import FastNoiseLite, NoiseType, FractalType
@@ -15,6 +20,24 @@ WC_FILES = [
 ]
 WC_URL = "https://geodata.ucdavis.edu/climate/worldclim/2_1/base/wc2.1_10m_bio.zip"
 STATS_CACHE_PATH = "data/global/synthetic_map_stats.json"
+STATS_CACHE_VERSION = 2
+
+
+def _download_url(url: str, destination: str | os.PathLike) -> None:
+    """Download with an explicit CA bundle and atomically publish the result."""
+    destination = os.fspath(destination)
+    partial_path = f"{destination}.part"
+    context = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        with urllib.request.urlopen(url, context=context, timeout=60) as response:
+            with open(partial_path, "wb") as output_file:
+                shutil.copyfileobj(response, output_file)
+        os.replace(partial_path, destination)
+    except Exception:
+        if os.path.exists(partial_path):
+            os.remove(partial_path)
+        raise
 
 def _ensure_wc_files():
     missing = [f for f in WC_FILES if not os.path.exists(f)]
@@ -22,8 +45,6 @@ def _ensure_wc_files():
         return
     
     import zipfile
-    import urllib.request
-    
     print("Missing WorldClim files.")
     response = input(f"Download from {WC_URL}? [y/N]: ").strip().lower()
     if response != 'y':
@@ -33,7 +54,7 @@ def _ensure_wc_files():
     zip_path = "data/global/wc2.1_10m_bio.zip"
     
     print(f"Downloading {WC_URL}...")
-    urllib.request.urlretrieve(WC_URL, zip_path)
+    _download_url(WC_URL, zip_path)
     
     print("Extracting...")
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -86,7 +107,10 @@ def _compute_map_stats(frequency_mult, drop_water_pct):
     temp_std_p1 = np.percentile(temp_std_img[valid_mask], 0.1)
     temp_std_p99 = np.percentile(temp_std_img[valid_mask], 99.9)
 
-    def compute_quantiles(base_image, frequency, octaves, lacunarity, gain, seed, base_image_mask=None):
+    def compute_quantiles(
+        base_image, frequency, octaves, lacunarity, gain, seed,
+        base_image_mask=None, tail_epsilon=1e-4,
+    ):
         noise = FastNoiseLite(seed=seed)
         noise.noise_type = NoiseType.NoiseType_Perlin
         noise.frequency = frequency
@@ -101,18 +125,28 @@ def _compute_map_stats(frequency_mult, drop_water_pct):
         xx, yy = np.meshgrid(x, y)
         coords = np.array([xx.flatten(), yy.flatten()], dtype=np.float32)
 
-        noise_q = build_quantiles(noise.gen_from_coords(coords).flatten(), n_quantiles=64, eps=1e-4)
+        noise_q = build_quantiles(
+            noise.gen_from_coords(coords).flatten(), n_quantiles=64, eps=tail_epsilon
+        )
         if base_image_mask is not None:
-            base_q = build_quantiles(base_image[base_image_mask].flatten(), n_quantiles=64, eps=1e-4)
+            base_q = build_quantiles(
+                base_image[base_image_mask].flatten(), n_quantiles=64, eps=tail_epsilon
+            )
         else:
-            base_q = build_quantiles(base_image.flatten(), n_quantiles=64, eps=1e-4)
+            base_q = build_quantiles(
+                base_image.flatten(), n_quantiles=64, eps=tail_epsilon
+            )
         return noise_q, base_q
 
     fixed_seeds = [1, 2, 3, 4, 5]
     rng = np.random.default_rng(0)
     hist_mask = np.logical_or(rng.random((elev_img.shape[0], elev_img.shape[1])) > drop_water_pct, elev_img >= 0)
     maps = [
-        (elev_img,        0.05 * frequency_mult[0], 4, 2.0, 0.5, fixed_seeds[0], hist_mask),
+        # The former 1e-4 tail clipped the large-scale conditioning field near
+        # 5.8 km, making exceptional ranges impossible. Preserve the extreme
+        # source-raster tail for elevation only; climate keeps the conservative
+        # tail because outlier weather values are not useful conditioning.
+        (elev_img,        0.05 * frequency_mult[0], 4, 2.0, 0.5, fixed_seeds[0], hist_mask, 1e-7),
         (temp_img,        0.05 * frequency_mult[1], 2, 2.0, 0.5, fixed_seeds[1], None),
         (temp_std_img,    0.05 * frequency_mult[2], 4, 2.0, 0.5, fixed_seeds[2], None),
         (precip_img,      0.05 * frequency_mult[3], 4, 2.0, 0.5, fixed_seeds[3], None),
@@ -138,6 +172,9 @@ def _load_stats_cache():
     try:
         with open(STATS_CACHE_PATH, "r", encoding="utf-8") as cache_file:
             data = json.load(cache_file)
+        if data.get("version") != STATS_CACHE_VERSION:
+            print("Synthetic map stats cache version changed. Recomputing.")
+            return None
         noise_quantile_tables = data["noise_quantile_tables"]
         data_quantile_tables = data["data_quantile_tables"]
         stats = {
@@ -168,6 +205,7 @@ def _save_stats_cache(stats):
         quantile_index += 1
 
     payload = {
+        "version": STATS_CACHE_VERSION,
         "n_quantiles": int(len(noise_quantile_tables[0])) if noise_quantile_tables else 0,
         "noise_quantile_tables": noise_quantile_tables,
         "data_quantile_tables": data_quantile_tables,

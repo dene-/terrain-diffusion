@@ -8,8 +8,9 @@ import torch
 from flask import Flask, Response, jsonify, request
 from pyfastnoiselite.pyfastnoiselite import FastNoiseLite, NoiseType, FractalType
 
+from terrain_diffusion.common.device import select_device
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, resolve_hdf5_path
-from terrain_diffusion.common.cli_helpers import parse_kwargs, parse_cache_size
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 
 app = Flask(__name__)
 
@@ -18,13 +19,7 @@ _PIPELINE_CONFIG: dict = {}
 
 
 def _select_device() -> str:
-    env_device = os.getenv("TERRAIN_DEVICE")
-    if env_device:
-        return env_device
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    if dev == "cpu":
-        print("Warning: Using CPU (CUDA not available).")
-    return dev
+    return select_device()
 
 
 def _get_pipeline() -> WorldPipeline:
@@ -43,6 +38,7 @@ def _get_pipeline() -> WorldPipeline:
         torch_compile=cfg.get('torch_compile', False),
         dtype=cfg.get('dtype'),
         caching_strategy=caching_strategy,
+        cache_limit=cfg.get('cache_limit', 100 * 1024 * 1024),
         **cfg.get('kwargs', {}),
     )
     _PIPELINE.to(device)
@@ -805,23 +801,34 @@ def elev_8x():
 @click.argument("model_path", default="xandergos/terrain-diffusion-30m")
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct", help="Caching strategy: 'indirect' uses HDF5, 'direct' uses in-memory LRU cache")
 @click.option("--hdf5-file", default=None, help="HDF5 file path (required for indirect caching, optional for direct)")
-@click.option("--cache-size", default="100M", help="Cache size (e.g., 100M, 1G) for direct caching")
+@click.option("--cache-size", default=None, help="Cache size (default: 100M; MPS preset: 2G)")
 @click.option("--seed", type=int, default=None, help="Random seed (default: from file or random)")
-@click.option("--device", default=None, help="Device (cuda/cpu, default: auto)")
-@click.option("--batch-size", type=str, default="1,4", help="Batch size(s) for latent generation (e.g. '4' or '1,2,4,8')")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None, help="Device (default: auto)")
+@click.option("--batch-size", type=str, default=None, help="Latent batch size (default: 1,4; MPS preset: 8)")
 @click.option("--log-mode", type=click.Choice(["info", "verbose"]), default="verbose", help="Logging mode")
 @click.option("--compile/--no-compile", "torch_compile", default=True, help="Use torch.compile for faster inference")
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32", help="Model dtype")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--host", default="0.0.0.0", help="Server host")
 @click.option("--port", type=int, default=int(os.getenv("PORT", "8000")), help="Server port")
 @click.option("--kwarg", "extra_kwargs", multiple=True, help="Additional key=value kwargs (e.g. --kwarg native_resolution=30)")
-def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, torch_compile, dtype, host, port, extra_kwargs):
+def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batch_size, log_mode, torch_compile, dtype, performance_preset, host, port, extra_kwargs):
     """Minecraft terrain API server"""
     global _PIPELINE_CONFIG
     if caching_strategy == 'indirect' and hdf5_file is None:
         hdf5_file = 'TEMP'
     if hdf5_file is not None:
         hdf5_file = resolve_hdf5_path(hdf5_file)
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,4",
+        default_cache_size="100M",
+    )
     # Parse batch size(s)
     if ',' in batch_size:
         batch_sizes = [int(x.strip()) for x in batch_size.split(',')]
@@ -841,7 +848,7 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batc
         'log_mode': log_mode,
         'torch_compile': torch_compile,
         'dtype': dtype,
-        'kwargs': parse_kwargs(extra_kwargs),
+        'kwargs': kwargs,
     }
     _get_pipeline()  # Initialize pipeline upfront (triggers compilation)
     app.run(host=host, port=port, debug=False, threaded=False)
@@ -849,4 +856,3 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device, batc
 
 if __name__ == "__main__":
     main()
-

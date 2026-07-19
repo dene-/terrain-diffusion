@@ -10,9 +10,10 @@ import numpy as np
 import torch
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+from terrain_diffusion.common.device import select_device
 from terrain_diffusion.inference.world_pipeline import WorldPipeline, resolve_hdf5_path
 from terrain_diffusion.inference.relief_map import get_relief_map
-from terrain_diffusion.common.cli_helpers import parse_kwargs, parse_cache_size
+from terrain_diffusion.common.cli_helpers import apply_performance_preset, parse_cache_size
 
 app = Flask(__name__, static_folder='static')
 
@@ -23,10 +24,7 @@ CHANNEL_NAMES = ['Elev', 'p5', 'Temp', 'T std', 'Precip', 'Precip CV']
 
 
 def _select_device() -> str:
-    dev = os.getenv("TERRAIN_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
-    if dev == "cpu":
-        print("Warning: Using CPU (CUDA not available).")
-    return dev
+    return select_device()
 
 
 def _get_pipeline() -> WorldPipeline:
@@ -43,6 +41,7 @@ def _get_pipeline() -> WorldPipeline:
         torch_compile=cfg.get('torch_compile', False),
         dtype=cfg.get('dtype'),
         caching_strategy=caching_strategy,
+        cache_limit=cfg.get('cache_limit', 100 * 1024 * 1024),
         **cfg.get('kwargs', {}),
     )
     _PIPELINE.to(cfg.get('device') or _select_device())
@@ -274,24 +273,35 @@ def detail_raw():
 @click.argument("model_path", default="xandergos/terrain-diffusion-30m")
 @click.option("--caching-strategy", type=click.Choice(["indirect", "direct"]), default="direct")
 @click.option("--hdf5-file", default=None)
-@click.option("--cache-size", default="100M")
+@click.option("--cache-size", default=None, help="Cache size (default: 100M; MPS preset: 2G)")
 @click.option("--seed", type=int, default=None)
-@click.option("--device", default=None)
-@click.option("--batch-size", default="1,2,4,8,16")
+@click.option("--device", type=click.Choice(["cuda", "mps", "cpu"]), default=None)
+@click.option("--batch-size", default=None, help="Latent batch size (default: 1,2,4,8,16; MPS preset: 8)")
 @click.option("--log-mode", type=click.Choice(["info", "verbose"]), default="verbose")
 @click.option("--compile/--no-compile", "torch_compile", default=False)
-@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default="fp32")
+@click.option("--dtype", type=click.Choice(["fp32", "bf16", "fp16"]), default=None, help="Model dtype (default: fp32; MPS preset: fp16)")
+@click.option("--performance-preset", type=click.Choice(["mps"]), default=None)
 @click.option("--host", default="0.0.0.0")
 @click.option("--port", type=int, default=int(os.getenv("PORT", "8080")))
 @click.option("--kwarg", "extra_kwargs", multiple=True)
 def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device,
-         batch_size, log_mode, torch_compile, dtype, host, port, extra_kwargs):
+         batch_size, log_mode, torch_compile, dtype, performance_preset, host, port, extra_kwargs):
     """Terrain Explorer web app"""
     global _PIPELINE_CONFIG
     if caching_strategy == 'indirect' and hdf5_file is None:
         hdf5_file = 'TEMP'
     if hdf5_file is not None:
         hdf5_file = resolve_hdf5_path(hdf5_file)
+    device, batch_size, cache_size, dtype, kwargs = apply_performance_preset(
+        performance_preset,
+        device=device,
+        batch_size=batch_size,
+        cache_size=cache_size,
+        dtype=dtype,
+        extra_kwargs=extra_kwargs,
+        default_batch_size="1,2,4,8,16",
+        default_cache_size="100M",
+    )
     batch_sizes = [int(x) for x in batch_size.split(',')] if ',' in batch_size else int(batch_size)
     if dtype == 'fp32':
         dtype = None
@@ -306,7 +316,7 @@ def main(model_path, hdf5_file, caching_strategy, cache_size, seed, device,
         'log_mode': log_mode,
         'torch_compile': torch_compile,
         'dtype': dtype,
-        'kwargs': parse_kwargs(extra_kwargs),
+        'kwargs': kwargs,
     }
     _get_pipeline()
     app.run(host=host, port=port, debug=False, threaded=False)

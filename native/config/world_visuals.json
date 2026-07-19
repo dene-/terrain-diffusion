@@ -1,0 +1,77 @@
+{
+  "atmosphere": {
+    "aerialPerspectiveStrength": 1.0,
+    "baseHeightMeters": 0.0,
+    "distanceDensity": 8.499999967170879e-05,
+    "heightFalloff": 0.00011800000356743112,
+    "turbidity": 2.4000000953674316
+  },
+  "clouds": {
+    "baseHeightMeters": 1850.0,
+    "coverage": 0.48,
+    "density": 0.46,
+    "detailScaleMeters": 3600.0,
+    "lightSteps": 2,
+    "primarySteps": 10,
+    "topHeightMeters": 5400.0,
+    "weatherScaleMeters": 24000.0,
+    "windMetresPerSecond": 11.0
+  },
+  "forest": {
+    "billboardSinkMeters": 0.11999999731779099,
+    "billboardSizeMultiplier": 1.0,
+    "clearingScaleMeters": 420.0,
+    "clearingStrength": 0.7200000286102295,
+    "geometryCullPixelThreshold": 1.350000023841858,
+    "globalDensity": 0.8799999952316284,
+    "maximumSlope": 0.47999998927116394,
+    "midPixelThreshold": 4.0,
+    "minimumTemperature": -8.0,
+    "nearPixelThreshold": 18.0,
+    "nearShadowDistanceMeters": 1400.0,
+    "precipitationResponse": 1.0,
+    "treeLineEndMeters": 3450.0,
+    "treeLineStartMeters": 2150.0
+  },
+  "lighting": {
+    "exposure": 0.9,
+    "skyIntensity": 0.6800000071525574,
+    "sunAzimuthDegrees": 132.0,
+    "sunElevationDegrees": 46.0,
+    "sunIntensity": 1.0800000429153442
+  },
+  "metrics": {
+    "elevationMetersPerSourceUnit": 1.0,
+    "metersPerWorldUnit": 1.0,
+    "verticalExaggeration": 1.0
+  },
+  "snow": {
+    "aspectStrength": 0.2199999988079071,
+    "slopeRetentionEnd": 0.6200000047683716,
+    "slopeRetentionStart": 0.10000000149011612,
+    "temperatureFullC": -7.0,
+    "temperatureStartC": 1.5
+  },
+  "streaming": {
+    "maxConcurrentRequests": 1,
+    "maxDecodeJobs": 1,
+    "maxDerivedMapJobs": 1,
+    "maxGpuUploadBytesPerFrame": 33554432,
+    "maxGpuUploadsPerFrame": 2,
+    "maxVegetationJobs": 1,
+    "maxResidentTiles": 512,
+    "terrainMemoryMB": 768,
+    "vegetationMemoryMB": 384
+  },
+  "terrain": {
+    "detailFadeEndMeters": 18000.0,
+    "detailFadeStartMeters": 1200.0,
+    "lodHysteresis": 0.18000000715255737,
+    "macroTextureScaleMeters": 1200.0,
+    "maxScreenSpaceErrorPixels": 2.4000000953674316,
+    "rockSlopeFull": 0.5799999833106995,
+    "rockSlopeStart": 0.20000000298023224,
+    "screeSlopeFull": 0.41999998688697815,
+    "screeSlopeStart": 0.11999999731779099
+  }
+}

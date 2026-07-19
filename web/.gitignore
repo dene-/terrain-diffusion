@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+!public/assets/spruce-v3.png
+!public/assets/oak.png
+!public/assets/birch.png
+!public/assets/acacia.png
+!public/assets/tropical.png

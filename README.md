@@ -29,37 +29,93 @@ If you want to understand or reproduce the core **InfiniteDiffusion** algorithm,
 
 **Install:**
 ```bash
-pip install torch diffusers transformers accelerate infinite-tensor pillow numpy
+uv sync --extra panorama --frozen
 ```
 
 **Run:**
 ```bash
-python annotated_infinite_panorama.py
+uv run python annotated_infinite_panorama.py
 ```
 
 This saves `output.png` (a 2048-pixel-wide crop of an unbounded panorama) next to the script. Edit the constants at the top of the file (`PROMPT`, `CROP_PIXEL_WIDTH`, `INTERMEDIATE_TIMESTEPS`, etc.) to experiment.
 
 ## Installation
 
+The project uses Python 3.12 and includes a checked-in `uv.lock` so every contributor
+gets the same dependency versions.
+
 ```bash
 git clone https://github.com/xandergos/terrain-diffusion
 cd terrain-diffusion
-pip install -r requirements.txt
+uv sync --frozen
 ```
 
-## GPU Acceleration with CUDA (NVIDIA GPU Required)
+Run commands inside the environment with `uv run`, for example:
+
+```bash
+uv run python -m terrain_diffusion --help
+```
+
+### Apple Silicon (M1 or newer)
+
+1. Install [`uv`](https://docs.astral.sh/uv/) if it is not already available:
+
+   ```bash
+   brew install uv
+   ```
+
+2. Create and populate the native arm64 environment:
+
+   ```bash
+   uv python install 3.12
+   uv sync --frozen
+   ```
+
+3. Verify the interpreter and PyTorch build:
+
+   ```bash
+   uv run python -c "import platform, torch; print('arch:', platform.machine()); print('MPS built:', torch.backends.mps.is_built()); print('MPS available:', torch.backends.mps.is_available())"
+   ```
+
+   `arch` should be `arm64`, and both MPS values should be `True`. If the architecture
+   is `x86_64`, the shell is running under Rosetta. Open a native arm64 terminal, move
+   the old environment aside, and recreate it:
+
+   ```bash
+   mv .venv .venv-rosetta-backup
+   uv sync --frozen
+   ```
+
+4. Start the explorer with conservative settings for unified memory:
+
+   ```bash
+   uv run python -m terrain_diffusion explore xandergos/terrain-diffusion-30m \
+     --performance-preset mps
+   ```
+
+   The first run downloads model weights and may prompt to download the WorldClim
+   source data used to initialize the procedural map statistics. Later runs reuse
+   the local caches. The CLI automatically selects devices in CUDA, MPS, then CPU
+   order, so `--device mps` may be omitted after setup is verified.
+
+The `mps` preset selects MPS, FP16, latent batch size 8, a 2 GB direct cache, and
+768-pixel decoder tiles with the existing 128-pixel overlap. It does not enable fast
+math or one-step latent generation, because those can change results. Explicit options
+and `--kwarg` values override the preset, for example `--batch-size 4` on a lower-memory
+machine. `torch.compile` is disabled automatically on Apple Silicon in this project.
+
+### NVIDIA CUDA
 
 If you have an NVIDIA GPU, it is strongly recommended to ensure that PyTorch is installed with CUDA support for GPU acceleration.
-Terrain Diffusion *can* run on a CPU as well, but it will be much slower. **Mac is CPU-only.**
+Terrain Diffusion can run on CPU as a fallback, but it will be much slower.
 
 ### Steps on Windows or Linux
 
 1. Install latest NVIDIA driver
 2. Install PyTorch with CUDA:
 
-```
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
+Follow the [PyTorch installation selector](https://pytorch.org/get-started/locally/) for
+the CUDA version installed on your system, then use the same `uv run` commands above.
 
 ## Quick Start
 
@@ -84,17 +140,102 @@ All models operate in two stages.
 This opens a two-panel GUI. The left panel shows the coarse map. Click any pixel on the coarse map to generate a high resolution shaded relief map on the right.
 You can also view the temperature of the high resolution map with `Temperature` (Adjusted for elevation).
 
-```
-python -m terrain_diffusion explore xandergos/terrain-diffusion-30m
+```bash
+uv run python -m terrain_diffusion explore xandergos/terrain-diffusion-30m
 ```
 
 ### General API
 
 This runs a generalized API that can be used to query for elevation and climate data. See [API_README.md](API_README.md) for details. This is primarily designed for developers who want to experiment with the tool without commiting to full integration.
 
+```bash
+uv run python -m terrain_diffusion api xandergos/terrain-diffusion-30m
 ```
-python -m terrain_diffusion api xandergos/terrain-diffusion-30m
+
+### Walk the generated world (Three.js game-jam demo)
+
+The `web/` app streams the deterministic world into a smooth Three.js terrain mesh at
+real-world scale: one scene unit is one metre. It includes Rapier character collision,
+walking, sprinting, jumping, flight, cascaded sun shadows, atmospheric sky and fog,
+lightweight clouds, water, chunk streaming, floating-origin rebasing, climate-aware
+photographic forests, and a wind-animated grass layer around the player.
+
+Forest regions use Terrain Diffusion's temperature, seasonality, precipitation, and
+precipitation-variability outputs to estimate growing season and tree moisture, following
+the same division of responsibility as the Minecraft integration. Coherent procedural
+noise then places dense stands and natural clearings inside suitable climate regions.
+Spruce, birch, oak, acacia, and tropical broadleaf atlases are selected from local
+temperature, moisture, and growing season. Deterministically jittered edge-to-edge
+candidates and continuous stand noise remove chunk-shaped planting gaps. Nearby trees
+use crossed cards, with one card contributing to shadows. Distant forests use one
+camera-facing five-tree cluster per 30 m cell with no shadow pass, preserving apparent
+canopy density while substantially reducing instances, alpha overdraw, and streaming CPU.
+Only the nearby high-resolution tiles create Rapier terrain colliders; distant visual LOD
+tiles share one curvature-viewer uniform and never enter the physics world.
+
+Grass uses the same climate stream, avoiding water, very steep ground, frozen regions,
+and severely hot or dry regions. One instanced mesh follows the player in a 100 m ring.
+Each overlapping patch contains 36 individually shaped and shaded blades, producing a
+dense field while vertex-shader wind moves everything without per-blade objects, CPU
+animation, or extra draw calls. Broad procedural height fields keep neighboring grass
+similar while varying meadow height between roughly ankle and knee height.
+
+The player uses a 1.80 m collision body, 1.68 m eye height, 70-degree vertical FOV,
+1.5 m/s walking speed, 5.2 m/s running speed, Earth gravity, and a human-scale jump.
+Terrain streams in ten real geometry levels: 7.5 m playable tiles, 15 m transition
+tiles, 30 m native tiles, then seven asynchronous far rings sampled from Terrain Diffusion's
+generated latent elevation field at 240 m through 15.36 km spacing. Fixed-size tiles overlap
+and alpha-morph between levels while retaining the same seamless procedural ground texture.
+The camera still stops at the height-dependent physical horizon—about 113 km over sea
+level at 1,000 m altitude—rather than exposing the entire
+coverage area at once. Far detail is generated and cached progressively around the player,
+with the HUD reporting installed versus requested coverage. Flying across chunk boundaries
+continues streaming detail around the new position. Adjacent tiles share boundary heights
+and averaged normals; overlapping alpha-morph bands hide resolution changes without skirts.
+
+View distance is based on the geometric horizon for the camera's height above local
+ground. Fog density, camera range, sky size, and the curved water surface adjust with that
+height. Only nearby playable tiles create collision bodies; medium and far
+Terrain Diffusion geometry remain visual-only for predictable physics cost.
+
+On Apple Silicon, first complete the [Apple Silicon setup](#apple-silicon-m1-or-newer),
+then install the web dependencies:
+
+```bash
+cd web
+yarn install
+cd ..
 ```
+
+Start the terrain server in terminal one. Fast math and one-step latent generation are
+appropriate for this interactive demo; remove either option if you prefer maximum
+numeric fidelity over generation speed.
+
+```bash
+PYTORCH_MPS_FAST_MATH=1 uv run python -m terrain_diffusion api \
+  xandergos/terrain-diffusion-30m \
+  --performance-preset mps \
+  --kwarg onestep_latent=true
+```
+
+The first launch downloads model and WorldClim data, so initial generation can take
+longer. In terminal two:
+
+```bash
+cd web
+yarn dev
+```
+
+Open `http://localhost:5173`, wait for the centre terrain chunk, and select **Enter
+world**. Controls are WASD to move, Shift to sprint, Space to jump, F to toggle flight,
+C to descend while flying, mouse wheel to adjust flight speed from 6–240 m/s, R (or
+**Random terrain**) to jump to a distant generated region, mouse to look, and Escape to
+release the pointer. Random travel searches several regions for walkable land above water
+and keeps the player suspended until high-detail terrain and collision are ready.
+
+For a 16 GB Mac, override the preset with `--batch-size 4` if unified-memory pressure
+causes swapping. The client dynamically lowers render resolution when frame rate falls;
+terrain generation speed is primarily controlled by the Python/MPS process.
 
 ### Azgaar to TIFF
 
@@ -182,4 +323,3 @@ You can also do some shenanigans with the coarse model's output directly. For ex
       series    = {SIGGRAPH Conference Papers '26}
 }
 ```
-
