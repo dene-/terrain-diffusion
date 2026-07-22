@@ -44,6 +44,7 @@ WorldVisualConfig WorldVisualConfig::load(const std::filesystem::path& path) {
         read(*iterator, "verticalExaggeration", result.metrics.verticalExaggeration);
     }
     if (const auto iterator = root.find("terrain"); iterator != root.end()) {
+        read(*iterator, "albedoGain", result.terrain.albedoGain);
         read(*iterator, "rockSlopeStart", result.terrain.rockSlopeStart);
         read(*iterator, "rockSlopeFull", result.terrain.rockSlopeFull);
         read(*iterator, "screeSlopeStart", result.terrain.screeSlopeStart);
@@ -117,6 +118,8 @@ WorldVisualConfig WorldVisualConfig::load(const std::filesystem::path& path) {
         || result.metrics.verticalExaggeration <= 0.0F) {
         throw std::runtime_error("Visual metric scales must be positive");
     }
+    require(result.terrain.albedoGain > 0.0F && result.terrain.albedoGain <= 2.0F,
+        "albedoGain must be in (0, 2]");
     requireUnit(result.terrain.rockSlopeStart, "rockSlopeStart must be in 0..1");
     requireUnit(result.terrain.rockSlopeFull, "rockSlopeFull must be in 0..1");
     requireUnit(result.terrain.screeSlopeStart, "screeSlopeStart must be in 0..1");
@@ -172,7 +175,7 @@ WorldVisualConfig WorldVisualConfig::load(const std::filesystem::path& path) {
 void WorldVisualConfig::save(const std::filesystem::path& path) const {
     const nlohmann::json root{
         {"metrics", {{"metersPerWorldUnit", metrics.metersPerWorldUnit}, {"elevationMetersPerSourceUnit", metrics.elevationMetersPerSourceUnit}, {"verticalExaggeration", metrics.verticalExaggeration}}},
-        {"terrain", {{"rockSlopeStart", terrain.rockSlopeStart}, {"rockSlopeFull", terrain.rockSlopeFull}, {"screeSlopeStart", terrain.screeSlopeStart}, {"screeSlopeFull", terrain.screeSlopeFull}, {"macroTextureScaleMeters", terrain.macroTextureScaleMeters}, {"detailFadeStartMeters", terrain.detailFadeStartMeters}, {"detailFadeEndMeters", terrain.detailFadeEndMeters}, {"maxScreenSpaceErrorPixels", terrain.maxScreenSpaceErrorPixels}, {"lodHysteresis", terrain.lodHysteresis}}},
+        {"terrain", {{"albedoGain", terrain.albedoGain}, {"rockSlopeStart", terrain.rockSlopeStart}, {"rockSlopeFull", terrain.rockSlopeFull}, {"screeSlopeStart", terrain.screeSlopeStart}, {"screeSlopeFull", terrain.screeSlopeFull}, {"macroTextureScaleMeters", terrain.macroTextureScaleMeters}, {"detailFadeStartMeters", terrain.detailFadeStartMeters}, {"detailFadeEndMeters", terrain.detailFadeEndMeters}, {"maxScreenSpaceErrorPixels", terrain.maxScreenSpaceErrorPixels}, {"lodHysteresis", terrain.lodHysteresis}}},
         {"forest", {{"globalDensity", forest.globalDensity}, {"clearingScaleMeters", forest.clearingScaleMeters}, {"clearingStrength", forest.clearingStrength}, {"maximumSlope", forest.maximumSlope}, {"minimumTemperature", forest.minimumTemperature}, {"treeLineStartMeters", forest.treeLineStartMeters}, {"treeLineEndMeters", forest.treeLineEndMeters}, {"precipitationResponse", forest.precipitationResponse}, {"billboardSinkMeters", forest.billboardSinkMeters}, {"billboardSizeMultiplier", forest.billboardSizeMultiplier}, {"nearPixelThreshold", forest.nearPixelThreshold}, {"midPixelThreshold", forest.midPixelThreshold}, {"geometryCullPixelThreshold", forest.geometryCullPixelThreshold}, {"nearShadowDistanceMeters", forest.nearShadowDistanceMeters}}},
         {"snow", {{"temperatureStartC", snow.temperatureStartC}, {"temperatureFullC", snow.temperatureFullC}, {"slopeRetentionStart", snow.slopeRetentionStart}, {"slopeRetentionEnd", snow.slopeRetentionEnd}, {"aspectStrength", snow.aspectStrength}}},
         {"atmosphere", {{"distanceDensity", atmosphere.distanceDensity}, {"heightFalloff", atmosphere.heightFalloff}, {"baseHeightMeters", atmosphere.baseHeightMeters}, {"aerialPerspectiveStrength", atmosphere.aerialPerspectiveStrength}, {"turbidity", atmosphere.turbidity}}},

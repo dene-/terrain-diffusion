@@ -40,6 +40,16 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
+if(NOT DEFINED stb_SOURCE_DIR)
+    FetchContent_Declare(
+        stb
+        GIT_REPOSITORY https://github.com/nothings/stb.git
+        GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(stb)
+endif()
+
 add_library(terrain_core STATIC
     src/TerrainClient.cpp
     src/TerrainMesh.cpp
@@ -55,6 +65,8 @@ set_target_properties(terrain_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(terrain_core
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    SYSTEM PRIVATE
+        "${stb_SOURCE_DIR}"
 )
 
 target_link_libraries(terrain_core

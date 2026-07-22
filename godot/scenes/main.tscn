@@ -1,95 +1,333 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene format=3 uid="uid://dhph5yt404etk"]
 
-[ext_resource type="Shader" path="res://materials/terrain.gdshader" id="1_terrain"]
+[ext_resource type="Shader" uid="uid://dpp1stw0gcoge" path="res://materials/physical_sky.gdshader" id="1_physical_sky"]
+[ext_resource type="Shader" uid="uid://0sovfwso1n3c" path="res://materials/aerial_perspective.gdshader" id="2_aerial"]
+[ext_resource type="Script" uid="uid://2l05ywiwfm5r" path="res://scripts/physical_atmosphere.gd" id="3_atmosphere"]
+[ext_resource type="Shader" uid="uid://br7mf4iwh3cyi" path="res://materials/ocean_surface.gdshader" id="12_water"]
+[ext_resource type="Script" uid="uid://cxlfr26vbk5mu" path="res://scripts/terrain_world_bootstrap.gd" id="13_terrain_bootstrap"]
+[ext_resource type="Script" uid="uid://bdwiof31rawb3" path="res://scripts/player_bootstrap.gd" id="14_player_bootstrap"]
+[ext_resource type="Resource" path="res://config/maps/seed_20260731_himalayan.tres" id="15_terrain_map"]
+[ext_resource type="CompositorEffect" path="res://config/world_cloud_effect.tres" id="16_cloud_effect"]
+[ext_resource type="Resource" path="res://config/world_cloud_profile.tres" id="17_cloud_profile"]
+[ext_resource type="Script" path="res://scripts/world_clouds.gd" id="18_cloud_controller"]
 
-[sub_resource type="Environment" id="Environment_main"]
-background_mode = 1
-background_color = Color(0.30, 0.45, 0.67, 1)
-ambient_light_source = 3
-ambient_light_color = Color(0.53, 0.64, 0.82, 1)
-ambient_light_energy = 0.7
-tonemap_mode = 2
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_water"]
+render_priority = 1
+shader = ExtResource("12_water")
+shader_parameter/deep_water_color = Color(0.035, 0.22, 0.34, 1)
+shader_parameter/surface_water_color = Color(0.06, 0.38, 0.52, 1)
+shader_parameter/horizon_sky_color = Color(0.46, 0.64, 0.76, 1)
+shader_parameter/sun_light_color = Color(1, 0.96, 0.88, 1)
+shader_parameter/sun_direction_world = Vector3(0.22584039, 0.95659, 0.18420565)
+shader_parameter/daylight = 1.0
+shader_parameter/macro_wavelength_meters = 260.0
+shader_parameter/macro_height_meters = 1.15
+shader_parameter/detail_wavelength_meters = 13.0
+shader_parameter/detail_normal_strength = 0.72
+shader_parameter/wave_time_scale = 0.42
+shader_parameter/wave_fade_start_meters = 450.0
+shader_parameter/wave_fade_end_meters = 3200.0
+shader_parameter/floating_origin_xz = Vector2(0, 0)
+shader_parameter/camera_absolute_xz = Vector2(0, 0)
+shader_parameter/sea_level_meters = -0.08
+shader_parameter/ocean_extent_scale = 1.0
+shader_parameter/ocean_view_distance_meters = 240000.0
+shader_parameter/viewer_underwater = 0.0
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ocean"]
+material = SubResource("ShaderMaterial_water")
+size = Vector2(65536, 65536)
+subdivide_width = 256
+subdivide_depth = 256
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape_player"]
 radius = 0.32
 height = 1.8
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_terrain"]
-shader = ExtResource("1_terrain")
+[sub_resource type="StyleBoxFlat" id="StyleBox_hud_button"]
+bg_color = Color(0.025, 0.045, 0.055, 0.88)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.82, 0.88, 0.9, 0.34)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
 
-[node name="Main" type="Node"]
+[sub_resource type="StyleBoxFlat" id="StyleBox_hud_button_hover"]
+bg_color = Color(0.09, 0.14, 0.16, 0.94)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.9, 0.95, 0.96, 0.68)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
 
-[node name="WorldRoot" type="Node3D" parent="."]
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_physical_sky"]
+shader = ExtResource("1_physical_sky")
+shader_parameter/sun_direction = Vector3(0.22584039, 0.95659, 0.18420565)
+shader_parameter/viewer_altitude_meters = 0.0
+shader_parameter/atmosphere_height_meters = 100000.0
+shader_parameter/maximum_distance_meters = 200000.0
+shader_parameter/rayleigh_scale_height_meters = 8400.0
+shader_parameter/mie_scale_height_meters = 1250.0
+shader_parameter/beta_rayleigh_per_meter = Vector3(5.804544e-06, 1.3562913e-05, 3.311258e-05)
+shader_parameter/beta_mie_per_meter = 2.1e-05
+shader_parameter/mie_eccentricity = 0.76
+shader_parameter/solar_radiance = 16.0
+shader_parameter/sun_angular_radius_radians = 0.004675
+shader_parameter/ground_albedo = Vector3(0.1, 0.12, 0.085)
+shader_parameter/night_radiance = Vector3(8e-05, 0.00012, 0.00022)
 
-[node name="TerrainWorld3D" type="TerrainWorld3D" parent="WorldRoot"]
-terrain_material = SubResource("ShaderMaterial_terrain")
+[sub_resource type="Sky" id="Sky_physical"]
+sky_material = SubResource("ShaderMaterial_physical_sky")
+process_mode = 2
 
-[node name="TerrainTiles" type="Node3D" parent="WorldRoot/TerrainWorld3D"]
+[sub_resource type="Environment" id="Environment_physical"]
+background_mode = 2
+sky = SubResource("Sky_physical")
+ambient_light_source = 2
+ambient_light_color = Color(0.54, 0.66, 0.88, 1)
+ambient_light_energy = 0.42
+reflected_light_source = 1
+tonemap_mode = 3
+tonemap_white = 6.0
+ssao_radius = 2.2
+ssao_intensity = 1.25
+ssao_power = 1.35
+ssao_detail = 0.55
+ssao_horizon = 0.08
+ssao_sharpness = 0.9
+ssao_ao_channel_affect = 0.85
 
-[node name="Vegetation" type="Node3D" parent="WorldRoot/TerrainWorld3D"]
+[sub_resource type="CameraAttributesPractical" id="CameraAttributes_physical"]
 
-[node name="Ocean" type="MeshInstance3D" parent="WorldRoot/TerrainWorld3D"]
+[sub_resource type="Compositor" id="Compositor_world_clouds"]
+compositor_effects = Array[CompositorEffect]([ExtResource("16_cloud_effect")])
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_aerial"]
+render_priority = 100
+shader = ExtResource("2_aerial")
+shader_parameter/sun_direction = Vector3(0.22584039, 0.95659, 0.18420565)
+shader_parameter/viewer_altitude_meters = 0.0
+shader_parameter/viewer_height_signed_meters = 0.0
+shader_parameter/maximum_distance_meters = 200000.0
+shader_parameter/atmosphere_height_meters = 100000.0
+shader_parameter/rayleigh_scale_height_meters = 8400.0
+shader_parameter/mie_scale_height_meters = 1250.0
+shader_parameter/beta_rayleigh_per_meter = Vector3(5.804544e-06, 1.3562913e-05, 3.311258e-05)
+shader_parameter/beta_mie_per_meter = 2.1e-05
+shader_parameter/mie_eccentricity = 0.76
+shader_parameter/solar_radiance = 16.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_aerial"]
+material = SubResource("ShaderMaterial_aerial")
+size = Vector2(2, 2)
+
+[node name="Main" type="Node" unique_id=1479197467]
+
+[node name="WorldRoot" type="Node3D" parent="." unique_id=129050479]
+
+[node name="TerrainWorld3D" type="Node3D" parent="WorldRoot" unique_id=1774625080]
+editor_description = "Map overview: Himalayan Ocean Continent at 1:200 scale. Select EditorMapPreview and press F, or click Frame Map Preview. Enable Stream Local Map In Editor for the 1:1 authoring view when the selected .tmap archive is available."
+script = ExtResource("13_terrain_bootstrap")
+terrain_map = ExtResource("15_terrain_map")
+
+[node name="EditorMapPreview" type="MeshInstance3D" parent="WorldRoot/TerrainWorld3D" unique_id=290193774]
+visible = false
 cast_shadow = 0
 
-[node name="Sun" type="DirectionalLight3D" parent="WorldRoot"]
-rotation_degrees = Vector3(-46, -132, 0)
-light_color = Color(1, 0.91, 0.78, 1)
-light_energy = 1.08
-shadow_enabled = true
-directional_shadow_mode = 2
+[node name="TerrainTiles" type="Node3D" parent="WorldRoot/TerrainWorld3D" unique_id=2012014273]
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="WorldRoot"]
-environment = SubResource("Environment_main")
+[node name="Vegetation" type="Node3D" parent="WorldRoot/TerrainWorld3D" unique_id=373933811]
 
-[node name="Player" type="PlayerController" parent="."]
-position = Vector3(0, 2, 6)
+[node name="Ocean" type="MeshInstance3D" parent="WorldRoot/TerrainWorld3D" unique_id=2021004887]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.08, 0)
+cast_shadow = 0
+mesh = SubResource("PlaneMesh_ocean")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
-position = Vector3(0, 0.9, 0)
+[node name="AuthoredWorld" type="Node3D" parent="WorldRoot" unique_id=152587713]
+editor_description = "Place persistent map objects here using absolute map-centred metre coordinates. Runtime floating-origin offsets are applied to this container automatically."
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=607356089]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 381.01608, 32.07035, -817.7295)
+script = ExtResource("14_player_bootstrap")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1393237070]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("CapsuleShape_player")
 
-[node name="Camera3D" type="Camera3D" parent="Player"]
-position = Vector3(0, 1.68, 0)
+[node name="Camera3D" type="Camera3D" parent="Player" unique_id=2114227966]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.68, 0)
 current = true
-fov = 68.0
-near = 0.05
-far = 1000000.0
+fov = 60.0
+far = 200000.0
 
-[node name="HUD" type="Control" parent="."]
+[node name="HUD" type="Control" parent="." unique_id=1341556781]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = -16.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="Title" type="Label" parent="HUD"]
+[node name="StatusPanel" type="ColorRect" parent="HUD" unique_id=1988910824]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -250.0
+offset_top = -62.0
+offset_right = 250.0
+offset_bottom = 62.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.015, 0.027, 0.033, 0.86)
+
+[node name="ControlsPanel" type="ColorRect" parent="HUD" unique_id=757984980]
+layout_mode = 1
+anchors_preset = -1
+anchor_top = 1.0
+anchor_right = 0.49
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -118.0
+offset_right = -8.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.015, 0.027, 0.033, 0.66)
+
+[node name="DiagnosticsPanel" type="ColorRect" parent="HUD" unique_id=281479835]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.51
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = -146.0
+offset_right = -16.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.015, 0.027, 0.033, 0.66)
+
+[node name="Title" type="Label" parent="HUD" unique_id=27802787]
+layout_mode = 0
 offset_left = 24.0
 offset_top = 20.0
 offset_right = 360.0
 offset_bottom = 70.0
 theme_override_colors/font_color = Color(0.95, 0.97, 1, 1)
+theme_override_colors/font_outline_color = Color(0.01, 0.02, 0.025, 0.82)
+theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 30
 text = "TERRAIN STREAM"
 
-[node name="Status" type="Label" parent="HUD"]
+[node name="Seed" type="Label" parent="HUD" unique_id=1363379319]
+layout_mode = 0
+offset_left = 26.0
+offset_top = 54.0
+offset_right = 420.0
+offset_bottom = 80.0
+theme_override_colors/font_color = Color(0.85, 0.89, 0.91, 0.82)
+theme_override_colors/font_outline_color = Color(0.01, 0.02, 0.025, 0.75)
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 14
+text = "SEED --"
+
+[node name="RandomTerrain" type="Button" parent="HUD" unique_id=1895363549]
 layout_mode = 1
-anchors_preset = 7
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -284.0
+offset_top = 18.0
+offset_right = -24.0
+offset_bottom = 66.0
+grow_horizontal = 0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(0.94, 0.97, 1, 0.96)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.65, 0.69, 0.71, 0.5)
+theme_override_font_sizes/font_size = 16
+theme_override_styles/normal = SubResource("StyleBox_hud_button")
+theme_override_styles/pressed = SubResource("StyleBox_hud_button")
+theme_override_styles/hover = SubResource("StyleBox_hud_button_hover")
+theme_override_styles/disabled = SubResource("StyleBox_hud_button")
+text = "RANDOM TERRAIN     R"
+
+[node name="StatusHeading" type="Label" parent="HUD" unique_id=52227399]
+layout_mode = 1
+anchors_preset = 8
 anchor_left = 0.5
-anchor_top = 1.0
+anchor_top = 0.5
 anchor_right = 0.5
-anchor_bottom = 1.0
-offset_left = -220.0
-offset_top = -64.0
-offset_right = 220.0
-offset_bottom = -24.0
+anchor_bottom = 0.5
+offset_left = -230.0
+offset_top = -38.0
+offset_right = 230.0
+offset_bottom = 3.0
 grow_horizontal = 2
-grow_vertical = 0
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.96, 0.98, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 26
+text = "GENERATING TERRAIN"
+horizontal_alignment = 1
+
+[node name="Status" type="Label" parent="HUD" unique_id=166783611]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -230.0
+offset_top = 12.0
+offset_right = 230.0
+offset_bottom = 43.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.8, 0.85, 0.88, 0.9)
+theme_override_font_sizes/font_size = 14
 text = "DISCOVERING WORLD"
 horizontal_alignment = 1
 
-[node name="Crosshair" type="Label" parent="HUD"]
+[node name="DebugView" type="Label" parent="HUD" unique_id=1553673051]
+visible = false
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 28.0
+offset_bottom = 58.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.95, 0.97, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.7)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 18
+text = "DEBUG | TERRAIN LOD"
+horizontal_alignment = 1
+
+[node name="Crosshair" type="Label" parent="HUD" unique_id=1962734337]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -102,12 +340,15 @@ offset_right = 10.0
 offset_bottom = 14.0
 grow_horizontal = 2
 grow_vertical = 2
+theme_override_colors/font_color = Color(0.96, 0.98, 1, 0.86)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 2
 theme_override_font_sizes/font_size = 20
 text = "+"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="AimDistance" type="Label" parent="HUD"]
+[node name="AimDistance" type="Label" parent="HUD" unique_id=2045867551]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -121,3 +362,108 @@ offset_bottom = 43.0
 grow_horizontal = 2
 grow_vertical = 2
 horizontal_alignment = 1
+
+[node name="Physical" type="Label" parent="HUD" unique_id=1937077996]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.51
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -136.0
+offset_right = -30.0
+offset_bottom = -92.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.9, 0.93, 0.95, 0.88)
+theme_override_font_sizes/font_size = 13
+text = "HUMAN SCALE | EYE 1.68 M | 1 UNIT = 1 M
+X -- M   Y -- M   Z -- M   ALT ASL -- M   AGL -- M"
+horizontal_alignment = 2
+
+[node name="Diagnostics" type="Label" parent="HUD" unique_id=848480407]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.51
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -92.0
+offset_right = -30.0
+offset_bottom = -24.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.9, 0.93, 0.95, 0.88)
+theme_override_font_sizes/font_size = 12
+text = "NET --  DEC --  DER --  VEG -- MS
+CPU -- + -- MB
+FAR GEOMETRY -- KM
+-- FPS   -- TILES +--   -- TREES   -- GRASS"
+horizontal_alignment = 2
+
+[node name="Controls" type="Label" parent="HUD" unique_id=1752838351]
+layout_mode = 1
+anchors_preset = -1
+anchor_top = 1.0
+anchor_right = 0.49
+anchor_bottom = 1.0
+offset_left = 28.0
+offset_top = -108.0
+offset_right = -20.0
+offset_bottom = -25.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.9, 0.93, 0.96, 0.86)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.72)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 12
+text = "WASD MOVE   SHIFT RUN   SPACE JUMP   WHEEL SPEED
+F FLY   C DESCEND   G DEBUG   R RANDOM TERRAIN
+1 EYE   2 CANOPY   3 3 KM   4 8 KM   5 15 KM NADIR   6 15 KM HORIZON   7 CLOUDS   9 WIREFRAME"
+
+[node name="StreamingProgress" type="ProgressBar" parent="HUD" unique_id=1286331529]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -4.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+value = 4.0
+show_percentage = false
+
+[node name="PhysicalAtmosphere" type="WorldEnvironment" parent="." unique_id=1232272633]
+environment = SubResource("Environment_physical")
+camera_attributes = SubResource("CameraAttributes_physical")
+compositor = SubResource("Compositor_world_clouds")
+script = ExtResource("3_atmosphere")
+
+[node name="Sun" type="DirectionalLight3D" parent="PhysicalAtmosphere" unique_id=1008785858]
+transform = Transform3D(0.63205963, -0.74128044, 0.22584039, 0, 0.29143712, 0.95659, -0.7749197, -0.60462195, 0.18420565, 0, 0, 0)
+light_color = Color(1, 0.93416744, 0.7868655, 1)
+light_energy = 1.0633054
+light_indirect_energy = 0.4
+light_volumetric_fog_energy = 0.0
+light_angular_distance = 0.53
+shadow_enabled = true
+shadow_opacity = 0.72
+directional_shadow_mode = 1
+directional_shadow_split_1 = 0.3
+directional_shadow_blend_splits = true
+directional_shadow_fade_start = 0.45
+directional_shadow_max_distance = 3000.0
+
+[node name="AerialPerspective" type="MeshInstance3D" parent="PhysicalAtmosphere" unique_id=888644061]
+cast_shadow = 0
+custom_aabb = AABB(-100000000, -100000000, -100000000, 200000000, 200000000, 200000000)
+mesh = SubResource("QuadMesh_aerial")
+
+[node name="WorldClouds" type="Node" parent="PhysicalAtmosphere"]
+editor_description = "Cloud preview is disabled by default. Enable Editor Preview Enabled in this node's Inspector to inspect a frozen cloud field without editor animation."
+script = ExtResource("18_cloud_controller")
+profile = ExtResource("17_cloud_profile")

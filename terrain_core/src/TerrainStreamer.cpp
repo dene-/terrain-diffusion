@@ -5,7 +5,9 @@
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <format>
 #include <limits>
@@ -17,6 +19,7 @@ namespace {
 
 [[nodiscard]] std::size_t terrainBytes(const TileMesh& tile) noexcept {
     return tile.raw.elevations.size() * sizeof(std::int16_t)
+        + tile.raw.renderElevations.size() * sizeof(float)
         + tile.raw.climate.size() * sizeof(float)
         + tile.vertices.size() * sizeof(TerrainVertex)
         + tile.indices.size() * sizeof(std::uint32_t);
@@ -32,6 +35,11 @@ namespace {
 TerrainStreamer::TerrainStreamer(TerrainClient client, WorldInfo world, WorldVisualConfig visuals)
     : client_(std::move(client)), world_(std::move(world)), visuals_(std::move(visuals)),
       specs_(makeSpecs(world_)), seed_(parseSeed(world_.seed)) {
+    measuredGeometricErrorSourceUnits_.resize(specs_.size());
+    presentationRanges_.reserve(specs_.size());
+    for (const auto& spec : specs_) {
+        presentationRanges_.push_back({spec.innerRadius, spec.outerRadius});
+    }
     workers_.reserve(visuals_.streaming.maxConcurrentRequests);
     for (std::size_t index = 0; index < visuals_.streaming.maxConcurrentRequests; ++index) {
         workers_.emplace_back([this](const std::stop_token token) { workerLoop(token); });
@@ -43,28 +51,44 @@ TerrainStreamer::~TerrainStreamer() {
     workReady_.notify_all();
 }
 
-void TerrainStreamer::update(const glm::dvec3& cameraPosition, const glm::dvec3& viewDirection) {
-    const glm::dvec2 horizontalView{viewDirection.x, viewDirection.z};
-    const auto horizontalViewLength = glm::length(horizontalView);
-    if (std::isfinite(horizontalViewLength) && horizontalViewLength > 0.05) {
-        preferredViewDirection_ = horizontalView / horizontalViewLength;
-    }
+void TerrainStreamer::update(
+    const glm::dvec3& cameraPosition,
+    const glm::dvec3& viewDirection,
+    const double verticalFovRadians,
+    const double viewportHeightPixels) {
+    static_cast<void>(viewDirection);
+    const auto validFov = std::isfinite(verticalFovRadians)
+        && verticalFovRadians > 0.1 && verticalFovRadians < 3.0;
+    const auto validViewportHeight = std::isfinite(viewportHeightPixels)
+        && viewportHeightPixels >= 1.0;
+    const auto nextFov = validFov ? verticalFovRadians : verticalFovRadians_;
+    const auto nextViewportHeight = validViewportHeight ? viewportHeightPixels : viewportHeightPixels_;
+    const auto projectionChanged = std::abs(nextFov - verticalFovRadians_) > 0.001
+        || std::abs(nextViewportHeight - viewportHeightPixels_)
+            > std::max(1.0, viewportHeightPixels_ * 0.02);
+    verticalFovRadians_ = nextFov;
+    viewportHeightPixels_ = nextViewportHeight;
+    if (projectionChanged) lastRebuildPosition_.x = std::numeric_limits<double>::infinity();
+
     const glm::dvec2 horizontalDelta{
         cameraPosition.x - lastRebuildPosition_.x,
         cameraPosition.z - lastRebuildPosition_.z,
     };
     const auto horizontalMoved = glm::length(horizontalDelta);
-    if (std::isfinite(horizontalMoved) && horizontalMoved > 5.0) {
-        preferredTravelDirection_ = horizontalDelta / horizontalMoved;
-    }
+    bool wantedRebuilt{};
     if (!std::isfinite(lastRebuildPosition_.x)
         || horizontalMoved > 120.0
         || std::abs(cameraPosition.y - lastRebuildAltitude_) > 500.0) {
         rebuildWanted(cameraPosition);
         lastRebuildPosition_ = cameraPosition;
         lastRebuildAltitude_ = cameraPosition.y;
+        wantedRebuilt = true;
     }
-    scheduleMissing(cameraPosition);
+    const auto now = std::chrono::steady_clock::now();
+    if (wantedRebuilt || now - lastMissingSchedule_ >= std::chrono::milliseconds{100}) {
+        scheduleMissing(cameraPosition);
+        lastMissingSchedule_ = now;
+    }
 }
 
 std::vector<TerrainEvent> TerrainStreamer::drainEvents(
@@ -132,6 +156,21 @@ std::vector<TerrainEvent> TerrainStreamer::drainEvents(
         ++performance_.completedTiles;
         performance_.terrainCpuBytes += terrainBytes(*item.tile);
         performance_.vegetationCpuBytes += vegetationBytes(*item.tile);
+        const auto level = item.tile->raw.key.level;
+        const auto sourceError = item.tile->raw.geometricErrorSourceUnits;
+        if (level >= 0
+            && static_cast<std::size_t>(level) < measuredGeometricErrorSourceUnits_.size()
+            && std::isfinite(sourceError) && sourceError >= 0.0) {
+            auto& measured = measuredGeometricErrorSourceUnits_[static_cast<std::size_t>(level)];
+            const auto materiallyLarger = sourceError > measured * 1.20 + 0.25;
+            measured = std::max(measured, sourceError);
+            if (materiallyLarger) {
+                // Re-evaluate the clipmap only when a newly observed source
+                // error materially changes its projection. This is event
+                // driven and avoids per-tile/per-frame diagnostic churn.
+                lastRebuildPosition_.x = std::numeric_limits<double>::infinity();
+            }
+        }
         loaded_.insert_or_assign(item.request.key, item.tile);
         deferredEvents_.push_back(TerrainEvent{
             .type = TerrainEvent::Type::Added,
@@ -169,6 +208,22 @@ void TerrainStreamer::releaseUploadedPayload(const TileKey& key) {
     performance_.vegetationCpuBytes -= previousVegetationBytes - vegetationBytes(tile);
 }
 
+void TerrainStreamer::recordResidentRenderBytes(const TileKey& key, const std::size_t bytes) {
+    if (const auto existing = residentRenderBytes_.find(key);
+        existing != residentRenderBytes_.end()) {
+        performance_.residentRenderBytes -= existing->second;
+    }
+    residentRenderBytes_.insert_or_assign(key, bytes);
+    performance_.residentRenderBytes += bytes;
+}
+
+void TerrainStreamer::releaseResidentRenderBytes(const TileKey& key) {
+    const auto existing = residentRenderBytes_.find(key);
+    if (existing == residentRenderBytes_.end()) return;
+    performance_.residentRenderBytes -= existing->second;
+    residentRenderBytes_.erase(existing);
+}
+
 void TerrainStreamer::regenerate(std::uint64_t seed) {
     ++generation_;
     seed_ = seed;
@@ -180,6 +235,8 @@ void TerrainStreamer::regenerate(std::uint64_t seed) {
         deferredEvents_.push_back(TerrainEvent{.type = TerrainEvent::Type::Removed, .key = key});
     }
     loaded_.clear();
+    residentRenderBytes_.clear();
+    std::ranges::fill(measuredGeometricErrorSourceUnits_, 0.0);
     performance_ = {};
     {
         std::scoped_lock lock{workMutex_};
@@ -196,14 +253,23 @@ void TerrainStreamer::setVisualConfig(const WorldVisualConfig& visuals, bool reb
 }
 
 std::optional<float> TerrainStreamer::sampleHeight(double worldX, double worldZ) const {
-    const TileMeshPtr* best{};
-    for (const auto& [key, tile] : loaded_) {
-        static_cast<void>(key);
-        if (tile->raw.spec.source != TileSource::Detailed || !contains(tile->raw, worldX, worldZ)) continue;
-        if (best == nullptr || tile->raw.spec.spacing < (*best)->raw.spec.spacing) best = &tile;
+    // Clipmap tiles are aligned to their level's world-space grid. Resolve at
+    // most one hash lookup per detailed level instead of scanning every
+    // resident tile, starting with the finest representation.
+    for (const auto& spec : specs_) {
+        if (spec.source != TileSource::Detailed) continue;
+        const TileKey key{
+            spec.level,
+            static_cast<std::int64_t>(std::floor(worldX / spec.tileWorldSize)),
+            static_cast<std::int64_t>(std::floor(worldZ / spec.tileWorldSize)),
+        };
+        const auto tile = loaded_.find(key);
+        if (tile != loaded_.end() && tile->second
+            && contains(tile->second->raw, worldX, worldZ)) {
+            return sampleRawHeight(tile->second->raw, worldX, worldZ);
+        }
     }
-    if (best == nullptr) return std::nullopt;
-    return sampleRawHeight((*best)->raw, worldX, worldZ);
+    return std::nullopt;
 }
 
 std::optional<glm::dvec3> TerrainStreamer::findWalkableLand(
@@ -225,18 +291,24 @@ std::optional<glm::dvec3> TerrainStreamer::findWalkableLand(
                 const auto rawX = x + raw.borderSamples;
                 const auto rawZ = z + raw.borderSamples;
                 const auto index = static_cast<std::size_t>(rawZ * raw.width + rawX);
-                const auto elevation = static_cast<double>(raw.elevations[index]) * sourceScale;
+                const auto sourceElevation = raw.renderElevations.size() == raw.elevations.size()
+                    ? static_cast<double>(raw.renderElevations[index])
+                    : static_cast<double>(raw.elevations[index]);
+                const auto elevation = sourceElevation * sourceScale;
                 if (elevation < 4.0 || elevation > 3'200.0) continue;
                 const auto worldX = raw.origin.x + static_cast<double>(x) * spacing;
                 const auto worldZ = raw.origin.y + static_cast<double>(z) * spacing;
                 const auto distance = std::hypot(worldX - center.x, worldZ - center.z);
                 if (distance > maximumDistance) continue;
-                const auto riseX = std::abs(
-                    static_cast<double>(raw.elevations[index + 1U])
-                    - static_cast<double>(raw.elevations[index - 1U])) * sourceScale / (spacing * 2.0);
-                const auto riseZ = std::abs(
-                    static_cast<double>(raw.elevations[index + static_cast<std::size_t>(raw.width)])
-                    - static_cast<double>(raw.elevations[index - static_cast<std::size_t>(raw.width)])) * sourceScale / (spacing * 2.0);
+                const auto sourceAt = [&raw](const std::size_t sampleIndex) {
+                    return raw.renderElevations.size() == raw.elevations.size()
+                        ? static_cast<double>(raw.renderElevations[sampleIndex])
+                        : static_cast<double>(raw.elevations[sampleIndex]);
+                };
+                const auto riseX = std::abs(sourceAt(index + 1U)
+                    - sourceAt(index - 1U)) * sourceScale / (spacing * 2.0);
+                const auto riseZ = std::abs(sourceAt(index + static_cast<std::size_t>(raw.width))
+                    - sourceAt(index - static_cast<std::size_t>(raw.width))) * sourceScale / (spacing * 2.0);
                 const auto slope = std::max(riseX, riseZ);
                 if (slope > 0.30) continue;
                 const auto score = distance + slope * 180.0 + std::max(0.0, elevation - 2'200.0) * 0.04;
@@ -251,14 +323,19 @@ std::optional<glm::dvec3> TerrainStreamer::findWalkableLand(
 }
 
 std::optional<float> TerrainStreamer::sampleRenderedHeight(double worldX, double worldZ) const {
-    const TileMeshPtr* best{};
-    for (const auto& [key, tile] : loaded_) {
-        static_cast<void>(key);
-        if (!contains(tile->raw, worldX, worldZ)) continue;
-        if (best == nullptr || tile->raw.spec.spacing < (*best)->raw.spec.spacing) best = &tile;
+    for (const auto& spec : specs_) {
+        const TileKey key{
+            spec.level,
+            static_cast<std::int64_t>(std::floor(worldX / spec.tileWorldSize)),
+            static_cast<std::int64_t>(std::floor(worldZ / spec.tileWorldSize)),
+        };
+        const auto tile = loaded_.find(key);
+        if (tile != loaded_.end() && tile->second
+            && contains(tile->second->raw, worldX, worldZ)) {
+            return sampleRawHeight(tile->second->raw, worldX, worldZ);
+        }
     }
-    if (best == nullptr) return std::nullopt;
-    return sampleRawHeight((*best)->raw, worldX, worldZ);
+    return std::nullopt;
 }
 
 std::optional<double> TerrainStreamer::measureRay(
@@ -272,10 +349,7 @@ std::optional<double> TerrainStreamer::measureRay(
         const auto point = origin + ray * distance;
         const auto height = sampleRenderedHeight(point.x, point.z);
         if (height) {
-            const auto horizontalDistance = std::hypot(point.x - origin.x, point.z - origin.z);
-            const auto curvedHeight = static_cast<double>(*height)
-                - horizontalDistance * horizontalDistance / EarthDiameterMetres;
-            const auto delta = point.y - curvedHeight;
+            const auto delta = point.y - static_cast<double>(*height);
             if (delta <= 0.0 && previousDelta > 0.0) {
                 double low = previousDistance;
                 double high = distance;
@@ -283,11 +357,10 @@ std::optional<double> TerrainStreamer::measureRay(
                     const auto middle = (low + high) * 0.5;
                     const auto middlePoint = origin + ray * middle;
                     const auto middleHeight = sampleRenderedHeight(middlePoint.x, middlePoint.z);
-                    const auto middleHorizontal = std::hypot(middlePoint.x - origin.x, middlePoint.z - origin.z);
-                    const auto middleCurved = middleHeight
-                        ? static_cast<double>(*middleHeight) - middleHorizontal * middleHorizontal / EarthDiameterMetres
+                    const auto middleSurface = middleHeight
+                        ? static_cast<double>(*middleHeight)
                         : -std::numeric_limits<double>::infinity();
-                    if (middlePoint.y <= middleCurved) high = middle;
+                    if (middlePoint.y <= middleSurface) high = middle;
                     else low = middle;
                 }
                 return (low + high) * 0.5;
@@ -330,14 +403,36 @@ double TerrainStreamer::installedRadius() const {
             }
         }
         if (!wantedAtLevel) continue;
-        if (complete) radius = std::max(radius, spec.outerRadius);
+        if (complete) radius = std::max(radius, presentationRange(spec.level).outerRadius);
     }
     return radius;
 }
 
+LodPresentationRange TerrainStreamer::presentationRange(const std::int32_t level) const noexcept {
+    if (level < 0 || static_cast<std::size_t>(level) >= presentationRanges_.size()) return {};
+    return presentationRanges_[static_cast<std::size_t>(level)];
+}
+
 std::size_t TerrainStreamer::pendingTileCount() const {
-    std::scoped_lock lock{workMutex_};
-    return queued_.size();
+    return static_cast<std::size_t>(
+        std::ranges::count_if(wanted_, [this](const auto& key) {
+            return !loaded_.contains(key);
+        }));
+}
+
+bool TerrainStreamer::hasWantedAncestor(TileKey key) const noexcept {
+    const auto parentCoordinate = [](const std::int64_t value) {
+        return value >= 0 ? value / 2 : -((-value + 1) / 2);
+    };
+    while (key.level < specs_.back().level) {
+        key = TileKey{
+            key.level + 1,
+            parentCoordinate(key.x),
+            parentCoordinate(key.z),
+        };
+        if (wanted_.contains(key)) return true;
+    }
+    return false;
 }
 
 std::string TerrainStreamer::debugLodConfiguration() const {
@@ -346,8 +441,15 @@ std::string TerrainStreamer::debugLodConfiguration() const {
         if (!result.empty()) result += " | ";
         const auto source = spec.source == TileSource::Detailed ? "detail"
             : spec.source == TileSource::Latent ? "latent" : "orbital";
-        result += std::format("L{}:{} {:.0f}m [{:.1f},{:.1f}]km", spec.level, source,
-            spec.spacing, spec.innerRadius / 1'000.0, spec.outerRadius / 1'000.0);
+        const auto projectionScale = viewportHeightPixels_
+            / (2.0 * std::tan(verticalFovRadians_ * 0.5));
+        const auto errorMetres = geometricErrorMetres(spec);
+        const auto projectedError = errorMetres * projectionScale
+            / std::max(lastViewerHeight_, 1.0);
+        result += std::format("L{}:{} {:.0f}m err~{:.1f}m/{:.2f}px [{:.1f},{:.1f}]km", spec.level, source,
+            spec.spacing, errorMetres, projectedError,
+            presentationRange(spec.level).innerRadius / 1'000.0,
+            presentationRange(spec.level).outerRadius / 1'000.0);
     }
     return result;
 }
@@ -403,33 +505,122 @@ void TerrainStreamer::workerLoop(const std::stop_token stopToken) {
 
 void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
     const auto localGround = sampleHeight(cameraPosition.x, cameraPosition.z);
-    const auto height = std::max(1.68, cameraPosition.y - static_cast<double>(localGround.value_or(0.0F)));
-    const auto horizonAngle = std::acos(EarthRadiusMetres / (EarthRadiusMetres + height));
-    const auto surfaceHorizon = EarthRadiusMetres * horizonAngle;
-    requestedRadius_ = std::clamp(surfaceHorizon * 1.12, 6'000.0, 5'500'000.0);
+    // Screen-space LOD depends on eye height above the local surface. Flat
+    // world coverage is bounded by atmospheric visibility, not a geometric
+    // planet horizon.
+    const auto lodHeight = std::max(
+        1.68, cameraPosition.y - static_cast<double>(localGround.value_or(0.0F)));
+    requestedRadius_ = 240'000.0;
+    lastViewerHeight_ = lodHeight;
 
-    // Select the innermost clipmap from projected ground resolution. The
-    // underlying samples remain the same scale-8 Terrain Diffusion surface;
-    // altitude only changes the decimation used to render it. Roughly 512
-    // samples span the camera-to-ground distance, keeping sub-pixel geometry
-    // out of aircraft/orbital views while restoring it automatically during
-    // descent.
-    const auto finestSpacing = static_cast<double>(world_.nativeResolution) / 8.0;
-    const auto targetSpacing = std::max(finestSpacing, height / 512.0);
-    activeMinimumLevel_ = std::clamp(
-        static_cast<std::int32_t>(std::ceil(std::log2(targetSpacing / finestSpacing))),
-        0, static_cast<std::int32_t>(specs_.size()) - 1);
-    // Above ordinary mountain-flight altitude, a complete continental shell
-    // is more valuable than one tiny high-resolution patch beneath the
-    // camera. Near detail still streams after the visible horizon is covered.
-    prioritizeCoarseFirst_ = height > 10'000.0;
+    // Choose the innermost active clipmap from geometric error projected into
+    // the actual camera. Detailed levels measure their deviation from cached
+    // scale-8 Terrain Diffusion samples; generated latent/orbital levels use
+    // conservative source-frequency estimates until a comparable hierarchy
+    // is available. Hysteresis makes altitude/FOV threshold crossings stable.
+    const auto projectionScale = viewportHeightPixels_
+        / (2.0 * std::tan(verticalFovRadians_ * 0.5));
+    const auto threshold = std::max(
+        static_cast<double>(visuals_.terrain.maxScreenSpaceErrorPixels), 0.25);
+    const auto hysteresis = std::clamp(
+        static_cast<double>(visuals_.terrain.lodHysteresis), 0.0, 0.95);
+    const auto projectedError = [&](const std::int32_t level) {
+        return geometricErrorMetres(specFor(level)) * projectionScale / lodHeight;
+    };
+    const auto maximumLevel = static_cast<std::int32_t>(specs_.size()) - 1;
+    const auto previousMinimumLevel = activeMinimumLevel_;
+    activeMinimumLevel_ = std::clamp(activeMinimumLevel_, 0, maximumLevel);
+    while (activeMinimumLevel_ < maximumLevel
+        && projectedError(activeMinimumLevel_ + 1) <= threshold * (1.0 - hysteresis)) {
+        ++activeMinimumLevel_;
+    }
+    while (activeMinimumLevel_ > 0
+        && projectedError(activeMinimumLevel_) > threshold * (1.0 + hysteresis)) {
+        --activeMinimumLevel_;
+    }
+    if (activeMinimumLevel_ != previousMinimumLevel) {
+        std::fprintf(stderr,
+            "Terrain SSE LOD changed: L%d -> L%d, height=%.1fm, error=%.2fpx, threshold=%.2fpx, viewport=%.0fpx\n",
+            previousMinimumLevel,
+            activeMinimumLevel_,
+            lodHeight,
+            projectedError(activeMinimumLevel_),
+            threshold,
+            viewportHeightPixels_);
+    }
 
+    // Convert the same projected-error rule into horizontal wandering-clipmap
+    // bands. The relevant camera distance is slant range, so altitude removes
+    // the horizontal component with Pythagoras. Immutable LodSpec radii remain
+    // cache/source metadata; presentation ranges are allowed to evolve.
+    std::vector<LodPresentationRange> nextPresentationRanges(specs_.size());
+    const auto horizonLimit = requestedRadius_ * 1.08;
+    double previousOuter{};
+    for (std::int32_t level = 0; level <= maximumLevel; ++level) {
+        const auto& spec = specFor(level);
+        if (level < activeMinimumLevel_) {
+            nextPresentationRanges[static_cast<std::size_t>(level)] = {};
+            continue;
+        }
+        if (level > activeMinimumLevel_ && previousOuter >= horizonLimit - 4.0) {
+            nextPresentationRanges[static_cast<std::size_t>(level)] = {
+                horizonLimit,
+                horizonLimit,
+            };
+            continue;
+        }
+
+        const auto inner = level == activeMinimumLevel_ ? 0.0 : previousOuter * 0.82;
+        double outer = horizonLimit;
+        if (level < maximumLevel) {
+            const auto acceptableSlantDistance = geometricErrorMetres(specFor(level + 1))
+                * projectionScale / threshold;
+            const auto horizontalDistanceSquared = acceptableSlantDistance * acceptableSlantDistance
+                - lodHeight * lodHeight;
+            const auto projectedOuter = horizontalDistanceSquared > 0.0
+                ? std::sqrt(horizontalDistanceSquared) : 0.0;
+            // Authored outer radii are hard streaming budgets. Measured error
+            // may pull a transition inward or keep a finer active centre, but
+            // one rugged sample must not multiply every tile and churn the
+            // bounded scale-8 page cache.
+            const auto capacity = spec.outerRadius;
+            outer = std::min({
+                std::max(projectedOuter, spec.tileWorldSize * 1.05),
+                capacity,
+                horizonLimit,
+            });
+        }
+        outer = std::max(outer, std::min(inner + spec.tileWorldSize * 0.25, horizonLimit));
+        nextPresentationRanges[static_cast<std::size_t>(level)] = {inner, outer};
+        previousOuter = outer;
+    }
+
+    const auto rangeChanged = presentationRanges_.size() != nextPresentationRanges.size()
+        || !std::ranges::equal(presentationRanges_, nextPresentationRanges, [](const auto& left, const auto& right) {
+            const auto materiallyDifferent = [](const double a, const double b) {
+                return std::abs(a - b) > std::max(4.0, std::max(std::abs(a), std::abs(b)) * 0.005);
+            };
+            return !materiallyDifferent(left.innerRadius, right.innerRadius)
+                && !materiallyDifferent(left.outerRadius, right.outerRadius);
+        });
+    if (rangeChanged) {
+        presentationRanges_ = std::move(nextPresentationRanges);
+        ++presentationRevision_;
+    }
+    // Coverage parents must arrive before their children. This guarantees a
+    // complete surface during progressive refinement at every altitude; fine
+    // tiles replace an already-visible parent only as complete sibling groups.
     std::unordered_set<TileKey, TileKeyHash> nextWanted;
     for (const auto& spec : specs_) {
         if (spec.level < activeMinimumLevel_) continue;
-        if (spec.innerRadius > requestedRadius_ * 1.08) break;
-        const auto outerLimit = std::min(spec.outerRadius * 1.05, requestedRadius_ * 1.08);
-        const auto innerLimit = spec.innerRadius * 0.72;
+        const auto range = presentationRange(spec.level);
+        if (range.innerRadius >= horizonLimit || range.outerRadius <= range.innerRadius) break;
+        const auto outerLimit = std::min(range.outerRadius * 1.05, horizonLimit);
+        // The selected minimum level is the centre of the wandering clipmap,
+        // not one of its annular parents. It must cover the camera even when
+        // finer cached levels are deliberately dormant at this projection.
+        const auto innerLimit = spec.level == activeMinimumLevel_
+            ? 0.0 : range.innerRadius * 0.72;
         const auto centerX = static_cast<std::int64_t>(std::floor(cameraPosition.x / spec.tileWorldSize));
         const auto centerZ = static_cast<std::int64_t>(std::floor(cameraPosition.z / spec.tileWorldSize));
         const auto dynamicRadius = std::min(spec.tileRadius,
@@ -460,6 +651,36 @@ void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
         }
     }
 
+    // The presentation bands are radial, while crack-free replacement is a
+    // quadtree operation. Expand every requested child to its complete sibling
+    // group and retain the parent through the coarsest active band. Without
+    // this closure a single annular child could suppress only part of a parent,
+    // producing the large skirt walls and holes visible at LOD boundaries.
+    std::int32_t maximumWantedLevel = activeMinimumLevel_;
+    for (const auto& key : nextWanted) {
+        maximumWantedLevel = std::max(maximumWantedLevel, key.level);
+    }
+    const auto parentCoordinate = [](const std::int64_t value) {
+        return value >= 0 ? value / 2 : -((-value + 1) / 2);
+    };
+    for (std::int32_t level = activeMinimumLevel_; level < maximumWantedLevel; ++level) {
+        std::vector<TileKey> levelKeys;
+        for (const auto& key : nextWanted) {
+            if (key.level == level) levelKeys.push_back(key);
+        }
+        for (const auto& key : levelKeys) {
+            const auto parentX = parentCoordinate(key.x);
+            const auto parentZ = parentCoordinate(key.z);
+            const auto childX = parentX * 2;
+            const auto childZ = parentZ * 2;
+            nextWanted.insert(TileKey{level, childX, childZ});
+            nextWanted.insert(TileKey{level, childX + 1, childZ});
+            nextWanted.insert(TileKey{level, childX, childZ + 1});
+            nextWanted.insert(TileKey{level, childX + 1, childZ + 1});
+            nextWanted.insert(TileKey{level + 1, parentX, parentZ});
+        }
+    }
+
     // Uploaded tiles form a bounded resident cache. Previously every tile
     // outside the current wanted set was destroyed immediately, so revisiting
     // cached terrain still repeated HTTP, decode, derivation and GPU upload.
@@ -482,14 +703,17 @@ void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
             deferredEvents_.push_back(TerrainEvent{.type = TerrainEvent::Type::Removed, .key = loaded->first});
             performance_.terrainCpuBytes -= terrainBytes(*loaded->second);
             performance_.vegetationCpuBytes -= vegetationBytes(*loaded->second);
+            releaseResidentRenderBytes(loaded->first);
             loaded_.erase(loaded);
         }
     }
 
     const auto terrainBudget = visuals_.streaming.terrainMemoryMegabytes * 1024U * 1024U;
     const auto vegetationBudget = visuals_.streaming.vegetationMemoryMegabytes * 1024U * 1024U;
+    const auto renderBudget = terrainBudget + vegetationBudget;
     if (performance_.terrainCpuBytes > terrainBudget
-        || performance_.vegetationCpuBytes > vegetationBudget) {
+        || performance_.vegetationCpuBytes > vegetationBudget
+        || performance_.residentRenderBytes > renderBudget) {
         struct EvictionCandidate final { TileKey key; double score; };
         std::vector<EvictionCandidate> candidates;
         candidates.reserve(loaded_.size());
@@ -507,12 +731,14 @@ void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
         std::ranges::sort(candidates, {}, &EvictionCandidate::score);
         for (auto iterator = candidates.rbegin(); iterator != candidates.rend()
             && (performance_.terrainCpuBytes > terrainBudget
-                || performance_.vegetationCpuBytes > vegetationBudget); ++iterator) {
+                || performance_.vegetationCpuBytes > vegetationBudget
+                || performance_.residentRenderBytes > renderBudget); ++iterator) {
             const auto loaded = loaded_.find(iterator->key);
             if (loaded == loaded_.end()) continue;
             deferredEvents_.push_back(TerrainEvent{.type = TerrainEvent::Type::Removed, .key = loaded->first});
             performance_.terrainCpuBytes -= terrainBytes(*loaded->second);
             performance_.vegetationCpuBytes -= vegetationBytes(*loaded->second);
+            releaseResidentRenderBytes(loaded->first);
             nextWanted.erase(loaded->first);
             loaded_.erase(loaded);
         }
@@ -528,6 +754,7 @@ void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
             auto request = requests_.top();
             requests_.pop();
             if (request.generation == generation_ && nextWanted.contains(request.key)) {
+                request.priority = requestPriority(request.key, request.spec, cameraPosition);
                 retained.push(std::move(request));
             } else {
                 queued_.erase(request.key);
@@ -538,59 +765,110 @@ void TerrainStreamer::rebuildWanted(const glm::dvec3& cameraPosition) {
     wanted_ = std::move(nextWanted);
 }
 
+double TerrainStreamer::requestPriority(
+    const TileKey& key,
+    const LodSpec& spec,
+    const glm::dvec3& cameraPosition) const {
+    const auto minimumX = static_cast<double>(key.x) * spec.tileWorldSize;
+    const auto minimumZ = static_cast<double>(key.z) * spec.tileWorldSize;
+    const auto maximumX = minimumX + spec.tileWorldSize;
+    const auto maximumZ = minimumZ + spec.tileWorldSize;
+    const auto closestX = std::clamp(cameraPosition.x, minimumX, maximumX);
+    const auto closestZ = std::clamp(cameraPosition.z, minimumZ, maximumZ);
+
+    // Parent readiness is enforced by scheduleMissing(). Among the eligible
+    // tiles, footprint distance produces a radial, player-outward load order.
+    return std::hypot(closestX - cameraPosition.x, closestZ - cameraPosition.z);
+}
+
 void TerrainStreamer::scheduleMissing(const glm::dvec3& cameraPosition) {
     const auto now = std::chrono::steady_clock::now();
-    bool added{};
     std::scoped_lock lock{workMutex_};
+    const auto queueCapacity = std::max<std::size_t>(
+        static_cast<std::size_t>(visuals_.streaming.maxConcurrentRequests) * 8U,
+        16U);
+    if (queued_.size() >= queueCapacity) return;
+
+    std::int32_t maximumWantedLevel = activeMinimumLevel_;
+    for (const auto& key : wanted_) maximumWantedLevel = std::max(maximumWantedLevel, key.level);
+    const auto parentCoordinate = [](const std::int64_t value) {
+        return value >= 0 ? value / 2 : -((-value + 1) / 2);
+    };
+    struct Candidate final {
+        TileKey key;
+        double priority{};
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(wanted_.size());
     for (const auto& key : wanted_) {
         if (loaded_.contains(key) || queued_.contains(key)) continue;
         const auto retry = retryAfter_.find(key);
         if (retry != retryAfter_.end() && retry->second > now) continue;
+        if (key.level < maximumWantedLevel) {
+            const TileKey parent{
+                key.level + 1,
+                parentCoordinate(key.x),
+                parentCoordinate(key.z),
+            };
+            if (wanted_.contains(parent) && !loaded_.contains(parent)) continue;
+        }
         const auto& spec = specFor(key.level);
-        const auto centerX = (static_cast<double>(key.x) + 0.5) * spec.tileWorldSize;
-        const auto centerZ = (static_cast<double>(key.z) + 0.5) * spec.tileWorldSize;
-        const auto distance = std::hypot(centerX - cameraPosition.x, centerZ - cameraPosition.z);
-        // Start at the finest level that can still affect a pixel, then expand
-        // outward. Normalising distance by tile size avoids kilometre-scale
-        // rings permanently starving behind a few local requests.
-        const auto levelDistance = prioritizeCoarseFirst_
-            ? specs_.back().level - key.level
-            : key.level - activeMinimumLevel_;
-        const auto levelPenalty = static_cast<double>(levelDistance) * 1'200.0;
-        const glm::dvec2 tileDirection{centerX - cameraPosition.x, centerZ - cameraPosition.z};
-        const auto directionLength = glm::length(tileDirection);
-        const auto travelAlignment = directionLength > 1.0 && glm::length(preferredTravelDirection_) > 0.5
-            ? std::max(0.0, glm::dot(tileDirection / directionLength, preferredTravelDirection_))
-            : 0.0;
-        const auto viewAlignment = directionLength > 1.0
-            ? std::max(0.0, glm::dot(tileDirection / directionLength, preferredViewDirection_))
-            : 1.0;
-        // Missing geometry in front of the player is much more visible than
-        // equal-distance side or rear coverage. Distance still guarantees a
-        // hole-free local footprint; this term controls async request order.
-        const auto viewPenalty = (1.0 - viewAlignment) * 6'000.0;
-        const auto priority = levelPenalty + distance / spec.tileWorldSize * 1'000.0
-            + viewPenalty - travelAlignment * 1'200.0;
-        requests_.push(Request{key, spec, generation_, seed_, priority});
-        queued_.insert(key);
-        added = true;
+        candidates.push_back({key, requestPriority(key, spec, cameraPosition)});
     }
-    if (added) workReady_.notify_all();
+    std::ranges::sort(candidates, {}, &Candidate::priority);
+    const auto available = queueCapacity - queued_.size();
+    const auto count = std::min(available, candidates.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& candidate = candidates[index];
+        const auto& spec = specFor(candidate.key.level);
+        requests_.push(Request{
+            candidate.key,
+            spec,
+            generation_,
+            seed_,
+            candidate.priority,
+        });
+        queued_.insert(candidate.key);
+    }
+    if (count > 0U) workReady_.notify_all();
 }
 
 std::vector<LodSpec> TerrainStreamer::makeSpecs(const WorldInfo& world) {
     std::vector<LodSpec> specs;
     constexpr std::int32_t scale = 8;
-    constexpr std::int32_t segments = 128;
-    constexpr std::int32_t levelCount = 11;
-    constexpr double baseOuterRadius = 1'200.0;
+    constexpr std::int32_t baseSegments = 128;
+    constexpr std::int32_t levelCount = 10;
+    constexpr double baseOuterRadius = 960.0;
     const auto finestSpacing = static_cast<double>(world.nativeResolution) / scale;
     double previousOuter{};
     for (std::int32_t level = 0; level < levelCount; ++level) {
+        // Keep full density underfoot and enough density in the first coarse
+        // ring for silhouettes. More distant rings otherwise feed sub-pixel
+        // triangles to RenderingServer and occasionally exceed the main-thread
+        // upload budget. The measured geometric error/SSE logic still decides
+        // how close each representation may be shown.
+        // GPU heightmap tiles retain a dense near patch, then halve grid
+        // density aggressively because displacement and normal reconstruction
+        // happen in the shader. Far rings no longer submit millions of unique
+        // CPU-authored vertices whose projected triangles are sub-pixel.
+        // Keep full density near the viewer, then halve the grid through the
+        // middle and horizon bands. Tile world sizes remain unchanged, so
+        // only geometry density changes.
+        const std::int32_t segments = level == 0 ? 128
+            : level <= 4 ? 64
+            : level <= 7 ? 32
+            : 16;
+        const auto originalLevelTileSize = finestSpacing
+            * static_cast<double>(baseSegments)
+            * static_cast<double>(std::uint64_t{1} << level);
         TileSource source{TileSource::Detailed};
-        auto sourceScale = scale;
-        auto stride = 1 << level;
-        auto spacing = finestSpacing * stride;
+        // Every detailed LOD samples one canonical native-resolution height
+        // field in TerrainClient. Fine levels interpolate it locally and
+        // coarse levels decimate it, so shared vertices remain identical and
+        // no ring needs a 4096-square upsampled source page.
+        auto sourceScale = 1;
+        auto spacing = originalLevelTileSize / static_cast<double>(segments);
+        auto stride = static_cast<std::int32_t>(std::llround(spacing / finestSpacing));
         if (level >= 6 && level <= 9) {
             // Exact source pages remain practical through L5. Past that, a
             // single render tile would touch 4, 16, 64... independent 32 MiB
@@ -598,20 +876,18 @@ std::vector<LodSpec> TerrainStreamer::makeSpecs(const WorldInfo& world) {
             // horizon preview while detailed pages stream near the viewer.
             source = TileSource::Latent;
             sourceScale = 1;
-            stride = 1 << (level - 6);
-            spacing = static_cast<double>(world.latentResolution) * stride;
-        } else if (level == 10) {
-            source = TileSource::Orbital;
-            sourceScale = 1;
-            stride = 1;
-            spacing = static_cast<double>(world.coarseResolution);
+            const auto originalStride = 1 << (level - 6);
+            const auto originalTileSize = static_cast<double>(world.latentResolution)
+                * static_cast<double>(originalStride * baseSegments);
+            spacing = originalTileSize / static_cast<double>(segments);
+            stride = std::max(1, static_cast<std::int32_t>(std::llround(
+                spacing / static_cast<double>(world.latentResolution))));
         }
         const auto tileSize = spacing * segments;
         auto outer = baseOuterRadius * std::pow(2.0, level);
-        // The last ring is the aircraft/orbital horizon shell. Widening this
-        // single very coarse annulus reaches the ~3,200 km horizon at 800 km
-        // altitude without multiplying every inner ring's vertex count.
-        if (level == levelCount - 1) outer = 3'700'000.0;
+        // Ten levels cover the finite map and the physical horizon at the
+        // 15 km aircraft ceiling. The obsolete orbital shell is intentionally
+        // absent.
         const auto inner = level == 0 ? 0.0 : previousOuter * 0.82;
         specs.push_back(LodSpec{
             .level = level,
@@ -661,15 +937,60 @@ float TerrainStreamer::sampleRawHeight(const RawTile& tile, double worldX, doubl
     const auto z0 = std::min(static_cast<std::int32_t>(std::floor(z)), visibleHeight - 2);
     const auto tx = static_cast<float>(x - x0);
     const auto tz = static_cast<float>(z - z0);
-    const auto at = [&tile](std::int32_t sx, std::int32_t sz) {
+    const auto sourceAt = [&tile, visibleWidth, visibleHeight](std::int32_t sx, std::int32_t sz) {
+        sx = std::clamp(sx, -tile.borderSamples, visibleWidth - 1 + tile.borderSamples);
+        sz = std::clamp(sz, -tile.borderSamples, visibleHeight - 1 + tile.borderSamples);
         const auto rawX = sx + tile.borderSamples;
         const auto rawZ = sz + tile.borderSamples;
-        return static_cast<float>(tile.elevations[static_cast<std::size_t>(rawZ * tile.width + rawX)]);
+        const auto index = static_cast<std::size_t>(rawZ * tile.width + rawX);
+        return tile.renderElevations.size() == tile.elevations.size()
+            ? tile.renderElevations[index]
+            : static_cast<float>(tile.elevations[index]);
+    };
+    const auto at = [&tile, &sourceAt](std::int32_t sx, std::int32_t sz) {
+        if (tile.spec.source != TileSource::Detailed || tile.spec.stride != 1
+            || !tile.renderElevations.empty()) {
+            return sourceAt(sx, sz);
+        }
+        constexpr std::array<float, 3> weights{1.0F, 2.0F, 1.0F};
+        float result{};
+        for (std::int32_t dz = -1; dz <= 1; ++dz) {
+            for (std::int32_t dx = -1; dx <= 1; ++dx) {
+                result += sourceAt(sx + dx, sz + dz)
+                    * weights[static_cast<std::size_t>(dx + 1)]
+                    * weights[static_cast<std::size_t>(dz + 1)];
+            }
+        }
+        return result * (1.0F / 16.0F);
     };
     const auto a = std::lerp(at(x0, z0), at(x0 + 1, z0), tx);
     const auto b = std::lerp(at(x0, z0 + 1), at(x0 + 1, z0 + 1), tx);
     return std::lerp(a, b, tz) * visuals_.metrics.elevationMetersPerSourceUnit
         * visuals_.metrics.verticalExaggeration;
+}
+
+double TerrainStreamer::geometricErrorMetres(const LodSpec& spec) const noexcept {
+    const auto verticalScale = std::abs(
+        static_cast<double>(visuals_.metrics.elevationMetersPerSourceUnit)
+        * static_cast<double>(visuals_.metrics.verticalExaggeration));
+    const auto level = static_cast<std::size_t>(std::max(spec.level, 0));
+    const auto measuredSourceError = level < measuredGeometricErrorSourceUnits_.size()
+        ? measuredGeometricErrorSourceUnits_[level] : 0.0;
+    const auto measuredError = measuredSourceError * verticalScale;
+
+    // These are conservative startup estimates, not replacement terrain.
+    // Measured detailed-page error can only raise them as real tiles arrive.
+    double fallbackError{};
+    if (spec.source == TileSource::Detailed) {
+        fallbackError = spec.level == 0 ? 0.5 * verticalScale
+            : spec.spacing * 0.5 * std::abs(static_cast<double>(visuals_.metrics.verticalExaggeration));
+    } else if (spec.source == TileSource::Latent) {
+        fallbackError = spec.spacing * std::abs(static_cast<double>(visuals_.metrics.verticalExaggeration));
+    } else {
+        fallbackError = spec.spacing * 1.5
+            * std::abs(static_cast<double>(visuals_.metrics.verticalExaggeration));
+    }
+    return std::max(measuredError, fallbackError);
 }
 
 } // namespace terrain

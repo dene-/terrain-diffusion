@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c8h4rqmem5hcj"
+path="res://.godot/imported/world_cloud_composite.glsl-19f44cbe5fda06a486881d711ef059a4.res"
+
+[deps]
+
+source_file="res://materials/world_cloud_composite.glsl"
+dest_files=["res://.godot/imported/world_cloud_composite.glsl-19f44cbe5fda06a486881d711ef059a4.res"]
+
+[params]
+

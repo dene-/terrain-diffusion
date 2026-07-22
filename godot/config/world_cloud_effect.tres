@@ -1,0 +1,7 @@
+[gd_resource type="CompositorEffect" script_class="WorldCloudEffect" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/world_cloud_effect.gd" id="1_effect"]
+
+[resource]
+resource_local_to_scene = true
+script = ExtResource("1_effect")

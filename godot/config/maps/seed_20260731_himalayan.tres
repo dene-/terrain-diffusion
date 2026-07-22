@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TerrainMapDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/terrain_map_definition.gd" id="1_map_definition"]
+
+[resource]
+script = ExtResource("1_map_definition")
+map_id = "seed_20260731_himalayan"
+display_name = "Himalayan Ocean Continent"
+archive_path = "res://../generated/ocean_continent_seed_20260731_himalayan_600km_square_30m/terrain.tmap"
+editor_heightmap_path = "res://../generated/ocean_continent_seed_20260731_himalayan_600km_square_30m/editor_heightmap.png"
+editor_albedo_path = "res://../generated/ocean_continent_seed_20260731_himalayan_600km_square_30m/coarse_biome_preview.png"
+width_m = 614400.0
+height_m = 614400.0

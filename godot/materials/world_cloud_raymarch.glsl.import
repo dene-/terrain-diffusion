@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bf4l81ulu4ior"
+path="res://.godot/imported/world_cloud_raymarch.glsl-c43a5416388c6f5d0f8e19b200dfb5da.res"
+
+[deps]
+
+source_file="res://materials/world_cloud_raymarch.glsl"
+dest_files=["res://.godot/imported/world_cloud_raymarch.glsl-c43a5416388c6f5d0f8e19b200dfb5da.res"]
+
+[params]
+

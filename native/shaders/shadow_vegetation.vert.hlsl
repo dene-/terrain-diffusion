@@ -6,20 +6,6 @@ cbuffer ShadowVegetationUniform : register(b0, space1)
     float4 CameraLocal;
 };
 
-static const float EarthRadius = 6371000.0f;
-
-float3 projectToPlanet(float3 flatWorld, float2 cameraXZ)
-{
-    float2 delta = flatWorld.xz - cameraXZ;
-    float arc = length(delta);
-    if (arc < 0.01f) return flatWorld;
-    float2 direction = delta / arc;
-    float angle = arc / EarthRadius;
-    float radial = EarthRadius + flatWorld.y;
-    float2 projectedXZ = cameraXZ + direction * (radial * sin(angle));
-    return float3(projectedXZ.x, radial * cos(angle) - EarthRadius, projectedXZ.y);
-}
-
 struct Input
 {
     float3 Position : TEXCOORD0;
@@ -58,8 +44,7 @@ Output main(Input input)
     float3 local = float3(input.Position.x * dimensions.x, input.Position.y * dimensions.y, input.Position.z * dimensions.x);
     local.xz = float2(local.x * cosine - local.z * sine, local.x * sine + local.z * cosine);
     float3 flatWorld = local + input.InstancePosition + TileOffset.xyz;
-    output.Position = mul(ShadowViewProjection,
-        float4(projectToPlanet(flatWorld, CameraLocal.xz), 1.0f));
+    output.Position = mul(ShadowViewProjection, float4(flatWorld, 1.0f));
     output.UV = float2((species + input.UV.x) * 0.2f, input.UV.y);
     return output;
 }

@@ -14,14 +14,8 @@ Make use of: `@/Users/den/.codex/RTK.md`
 5. Suggest durable improvements when they materially improve the project.
 6. Do not use subagents unless the user explicitly requests them.
 
-## Godot migration continuity
+## Godot development
 
-- Before doing any Godot migration work, and again after every context
-  compaction or resumed session, read `docs/GODOT_MIGRATION_PLAN.md` in full.
-- Continue from the first actionable unchecked item unless the user's latest
-  request changes the priority.
-- Update the checklist and decision log in that document as soon as work is
-  completed, deferred, blocked, or manually validated.
 - Automated/unit tests are explicitly out of scope. Use builds, runtime logs,
   Godot diagnostics, screenshots, performance counters, and user manual checks.
 - When editing GDScript, Godot scenes, or Godot project organization, read and

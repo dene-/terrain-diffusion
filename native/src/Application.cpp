@@ -216,11 +216,10 @@ std::string Application::visualTuningLabel() const {
 void Application::applyCameraBookmark(std::uint32_t bookmark) {
     auto position = controller_.position();
     const auto ground = streamer_->sampleHeight(position.x, position.z).value_or(0.0F);
-    // The two orbital bookmarks deliberately share altitude: 5 is a nadir
-    // coverage/LOD inspection and 6 is a horizon/curvature inspection. This
-    // makes visual validation repeatable without relying on pointer capture.
+    // The two highest bookmarks share the 15 km flight ceiling: 5 is a nadir
+    // coverage/LOD inspection and 6 is a flat-world distance inspection.
     static constexpr std::array<double, 6> altitudes{
-        1.68, 35.0, 3'000.0, 30'000.0, 160.0, 800'000.0};
+        1.68, 35.0, 3'000.0, 8'000.0, 15'000.0, 15'000.0};
     const auto index = std::min<std::size_t>(bookmark - 1U, altitudes.size() - 1U);
     position.y = static_cast<double>(ground) + altitudes[index];
     controller_.setPosition(position);
@@ -259,7 +258,14 @@ void Application::update(double deltaSeconds) {
         // the real altitude takes over as soon as a grounded spawn exists.
         streamPosition.y = 1.68;
     }
-    streamer_->update(streamPosition, controller_.forward());
+    int width{};
+    int height{};
+    SDL_GetWindowSizeInPixels(window_, &width, &height);
+    streamer_->update(
+        streamPosition,
+        controller_.forward(),
+        static_cast<double>(config_.verticalFovDegrees) * std::numbers::pi / 180.0,
+        static_cast<double>(std::max(height, 1)));
     for (auto& event : streamer_->drainEvents(
         config_.visuals.streaming.maxGpuUploadsPerFrame,
         config_.visuals.streaming.maxGpuUploadBytesPerFrame)) {
@@ -291,9 +297,6 @@ void Application::update(double deltaSeconds) {
     }
     controller_.update(deltaSeconds, *streamer_);
 
-    int width{};
-    int height{};
-    SDL_GetWindowSizeInPixels(window_, &width, &height);
     auto camera = controller_.camera(
         static_cast<std::uint32_t>(std::max(width, 1)),
         static_cast<std::uint32_t>(std::max(height, 1)));

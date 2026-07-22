@@ -13,9 +13,6 @@
 
 namespace terrain {
 
-constexpr double EarthRadiusMetres = 6'371'000.0;
-constexpr double EarthDiameterMetres = EarthRadiusMetres * 2.0;
-
 struct WorldInfo final {
     std::string seed;
     std::int32_t nativeResolution{30};
@@ -56,6 +53,14 @@ struct LodSpec final {
     bool vegetation{};
 };
 
+// Camera-dependent clipmap coverage is deliberately separate from LodSpec.
+// LodSpec is immutable source/cache identity; these radii may change with
+// altitude, projection, measured source error, and the physical horizon.
+struct LodPresentationRange final {
+    double innerRadius{};
+    double outerRadius{};
+};
+
 struct RawTile final {
     TileKey key;
     LodSpec spec;
@@ -65,7 +70,20 @@ struct RawTile final {
     // for central derivatives but never become render vertices.
     std::int32_t borderSamples{};
     glm::dvec2 origin{};
+    // Maximum observed source-elevation deviation from this tile's sampled
+    // mesh, expressed in source elevation units. Detailed scale-8 tiles
+    // measure this from bounded samples of the cached finest source page;
+    // negative means the source cannot provide a comparable error estimate.
+    double geometricErrorSourceUnits{-1.0};
     std::vector<std::int16_t> elevations;
+    // Optional sub-metre render samples. The API transports int16 elevations,
+    // but locally interpolated fine LODs must not quantize every 3.75 m vertex
+    // back to whole metres or visible contour terraces reappear.
+    std::vector<float> renderElevations;
+    // Interleaved environmental samples. HTTP/v2 sources provide the first
+    // four macro-climate channels; v3 archives provide eight detailed ecology
+    // channels while preserving those first four channel meanings.
+    std::int32_t climateChannels{4};
     std::vector<float> climate;
 };
 

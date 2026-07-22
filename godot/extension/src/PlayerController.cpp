@@ -5,6 +5,7 @@
 #include <godot_cpp/classes/input_event_key.hpp>
 #include <godot_cpp/classes/input_event_mouse_button.hpp>
 #include <godot_cpp/classes/input_event_mouse_motion.hpp>
+#include <godot_cpp/classes/os.hpp>
 #include <godot_cpp/classes/physics_direct_space_state3d.hpp>
 #include <godot_cpp/classes/physics_ray_query_parameters3d.hpp>
 #include <godot_cpp/classes/world3d.hpp>
@@ -31,6 +32,7 @@ void PlayerController::_bind_methods() {
     ClassDB::bind_method(godot::D_METHOD("get_jump_speed"), &PlayerController::get_jump_speed);
     ClassDB::bind_method(godot::D_METHOD("set_fly_speed", "value"), &PlayerController::set_fly_speed);
     ClassDB::bind_method(godot::D_METHOD("get_fly_speed"), &PlayerController::get_fly_speed);
+    ClassDB::bind_method(godot::D_METHOD("set_flying", "value"), &PlayerController::set_flying);
     ClassDB::bind_method(godot::D_METHOD("is_flying"), &PlayerController::is_flying);
     ClassDB::bind_method(godot::D_METHOD("get_aim_distance"), &PlayerController::get_aim_distance);
 
@@ -42,7 +44,7 @@ void PlayerController::_bind_methods() {
         "set_jump_speed", "get_jump_speed");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "fly_speed", godot::PROPERTY_HINT_RANGE, "2.0,20000.0,0.1,or_greater,suffix:m/s"),
         "set_fly_speed", "get_fly_speed");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "flying"), "", "is_flying");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "flying"), "set_flying", "is_flying");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "aim_distance"), "", "get_aim_distance");
 }
 
@@ -51,6 +53,14 @@ void PlayerController::_ready() {
         set_physics_process(false);
         set_process_unhandled_input(false);
         return;
+    }
+
+    const auto user_arguments = godot::OS::get_singleton()->get_cmdline_user_args();
+    for (std::int64_t index = 0; index < user_arguments.size(); ++index) {
+        if (user_arguments[index] == "--terrain-static-capture") {
+            static_capture_ = true;
+            break;
+        }
     }
 
     camera_ = godot::Object::cast_to<godot::Camera3D>(
@@ -62,6 +72,10 @@ void PlayerController::_ready() {
 
 void PlayerController::_physics_process(const double delta) {
     if (godot::Engine::get_singleton()->is_editor_hint()) return;
+    if (static_capture_) {
+        set_velocity({});
+        return;
+    }
 
     auto* input = godot::Input::get_singleton();
     if (input->is_action_just_pressed("toggle_flight")) {
@@ -96,7 +110,33 @@ void PlayerController::_physics_process(const double delta) {
 
     set_velocity(velocity);
     move_and_slide();
-    update_aim_distance();
+    if (flying_) {
+        auto position = get_global_position();
+        const auto maximum_body_altitude = static_cast<godot::real_t>(
+            MaximumEyeAltitudeMeters - EyeHeightMeters);
+        if (position.y > maximum_body_altitude) {
+            position.y = maximum_body_altitude;
+            set_global_position(position);
+            velocity = get_velocity();
+            velocity.y = std::min(velocity.y, 0.0F);
+            set_velocity(velocity);
+        }
+    }
+    aim_update_accumulator_ += delta;
+    if (aim_update_accumulator_ >= 0.1 && camera_ != nullptr) {
+        aim_update_accumulator_ = 0.0;
+        const auto origin = camera_->get_global_position();
+        const auto direction = -camera_->get_global_basis().get_column(2);
+        const auto aim_changed = !aim_state_initialized_
+            || origin.distance_squared_to(last_aim_origin_) >= 0.01F
+            || direction.distance_squared_to(last_aim_direction_) >= 0.000001F;
+        if (aim_changed) {
+            last_aim_origin_ = origin;
+            last_aim_direction_ = direction;
+            aim_state_initialized_ = true;
+            update_aim_distance();
+        }
+    }
 }
 
 void PlayerController::_unhandled_input(const godot::Ref<godot::InputEvent>& event) {
@@ -142,14 +182,27 @@ void PlayerController::update_aim_distance() {
     }
     const auto from = camera_->get_global_position();
     const auto direction = -camera_->get_global_basis().get_column(2);
-    const auto query = godot::PhysicsRayQueryParameters3D::create(from, from + direction * 1'000'000.0F);
+    constexpr godot::real_t MaximumTerrainRayDistanceMetres = 800'000.0F;
+    const auto query = godot::PhysicsRayQueryParameters3D::create(
+        from, from + direction * MaximumTerrainRayDistanceMetres);
     const auto result = get_world_3d()->get_direct_space_state()->intersect_ray(query);
+    double physics_distance{};
     if (result.has("position")) {
         const godot::Vector3 position = result["position"];
-        aim_distance_ = static_cast<double>(from.distance_to(position));
-    } else {
-        aim_distance_ = 0.0;
+        physics_distance = static_cast<double>(from.distance_to(position));
     }
+    aim_distance_ = physics_distance > 0.0 && terrain_aim_distance_ > 0.0
+        ? std::min(physics_distance, terrain_aim_distance_)
+        : std::max(physics_distance, terrain_aim_distance_);
+    update_aim_label();
+}
+
+void PlayerController::set_terrain_aim_distance(const double value) {
+    terrain_aim_distance_ = std::max(value, 0.0);
+    update_aim_distance();
+}
+
+void PlayerController::update_aim_label() {
     if (aim_label_ != nullptr && std::abs(displayed_aim_distance_ - aim_distance_) >= 0.1) {
         displayed_aim_distance_ = aim_distance_;
         if (aim_distance_ <= 0.0) {
@@ -170,7 +223,23 @@ void PlayerController::set_jump_speed(const double value) noexcept { jump_speed_
 double PlayerController::get_jump_speed() const noexcept { return jump_speed_; }
 void PlayerController::set_fly_speed(const double value) noexcept { fly_speed_ = std::clamp(value, 2.0, 20'000.0); }
 double PlayerController::get_fly_speed() const noexcept { return fly_speed_; }
+void PlayerController::set_flying(const bool value) noexcept {
+    flying_ = value;
+    set_velocity({});
+}
 bool PlayerController::is_flying() const noexcept { return flying_; }
+void PlayerController::set_look_direction(
+    const double yaw_radians,
+    const double pitch_radians) noexcept {
+    camera_pitch_ = std::clamp(
+        pitch_radians,
+        -std::numbers::pi_v<double> * 0.495,
+        std::numbers::pi_v<double> * 0.495);
+    set_rotation({0.0F, static_cast<godot::real_t>(yaw_radians), 0.0F});
+    if (camera_ != nullptr) {
+        camera_->set_rotation({static_cast<godot::real_t>(camera_pitch_), 0.0F, 0.0F});
+    }
+}
 double PlayerController::get_aim_distance() const noexcept { return aim_distance_; }
 
 } // namespace terrain::godot_adapter

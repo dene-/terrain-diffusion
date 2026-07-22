@@ -2,6 +2,7 @@
 
 #include "PlayerController.hpp"
 #include "TerrainWorld3D.hpp"
+#include "WorldVisualSettings.hpp"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/defs.hpp>
@@ -12,6 +13,7 @@ void initialize_terrain_stream_module(const godot::ModuleInitializationLevel lev
         return;
     }
     GDREGISTER_CLASS(terrain::godot_adapter::PlayerController);
+    GDREGISTER_CLASS(terrain::godot_adapter::WorldVisualSettings);
     GDREGISTER_CLASS(terrain::godot_adapter::TerrainWorld3D);
 }
 

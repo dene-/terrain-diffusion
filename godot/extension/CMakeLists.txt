@@ -2,10 +2,27 @@ cmake_minimum_required(VERSION 3.25)
 
 project(terrain_stream_godot VERSION 0.1.0 LANGUAGES CXX)
 
+# The extension build lives below the Godot project. Keep Godot's resource
+# scanner out of CMake products and fetched dependencies (some dependencies
+# intentionally contain malformed image fixtures).
+file(WRITE "${CMAKE_BINARY_DIR}/.gdignore" "")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Godot's editor selects the template_debug GDExtension ABI, but this client
+# performs production-scale streaming and visibility work while iterating in
+# the editor. Keep symbols/assertions while avoiding an otherwise unoptimized
+# terrain core that makes editor play misleadingly slower than the native app.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    if(MSVC)
+        add_compile_options(/O2)
+    else()
+        add_compile_options(-O2)
+    endif()
+endif()
 
 include(FetchContent)
 
@@ -37,6 +54,7 @@ add_library(terrain_stream_godot SHARED
     src/register_types.cpp
     src/PlayerController.cpp
     src/TerrainGodotAdapter.cpp
+    src/WorldVisualSettings.cpp
     src/TerrainWorld3D.cpp
 )
 

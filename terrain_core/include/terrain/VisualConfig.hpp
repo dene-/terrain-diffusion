@@ -13,6 +13,10 @@ struct TerrainMetricConfig final {
 };
 
 struct TerrainVisualConfig final {
+    // Linear-space diffuse calibration applied by presentation renderers.
+    // One preserves the authored biome albedo; lower values leave headroom
+    // for bright physical skies without changing terrain classification.
+    float albedoGain{0.56F};
     float rockSlopeStart{0.20F};
     float rockSlopeFull{0.58F};
     float screeSlopeStart{0.12F};
@@ -78,11 +82,11 @@ struct CloudVisualConfig final {
 };
 
 struct StreamingBudgetConfig final {
-    std::size_t maxConcurrentRequests{1};
+    std::size_t maxConcurrentRequests{4};
     std::size_t maxDecodeJobs{1};
     std::size_t maxDerivedMapJobs{1};
     std::size_t maxVegetationJobs{1};
-    std::size_t maxGpuUploadsPerFrame{2};
+    std::size_t maxGpuUploadsPerFrame{4};
     std::size_t maxGpuUploadBytesPerFrame{32U * 1024U * 1024U};
     std::size_t terrainMemoryMegabytes{768};
     std::size_t vegetationMemoryMegabytes{384};

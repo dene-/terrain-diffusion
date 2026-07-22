@@ -86,8 +86,37 @@ namespace {
     return static_cast<std::size_t>((z + border) * tile.width + x + border);
 }
 
+[[nodiscard]] float sourceElevationAt(const RawTile& tile, std::int32_t x, std::int32_t z) noexcept {
+    const auto index = rawIndex(tile, x, z);
+    return tile.renderElevations.size() == tile.elevations.size()
+        ? tile.renderElevations[index]
+        : static_cast<float>(tile.elevations[index]);
+}
+
+[[nodiscard]] bool smoothFinestElevation(const RawTile& tile) noexcept {
+    return tile.spec.source == TileSource::Detailed && tile.spec.stride == 1;
+}
+
 [[nodiscard]] float elevationAt(const RawTile& tile, std::int32_t x, std::int32_t z) noexcept {
-    return static_cast<float>(tile.elevations[rawIndex(tile, x, z)]);
+    if (!smoothFinestElevation(tile)) return sourceElevationAt(tile, x, z);
+
+    // Terrain Diffusion elevations ultimately originate as whole-metre int16
+    // samples. Local interpolation preserves sub-metre positions between
+    // those samples, but the source contours remain visible on gentle ground.
+    // A separable 1-2-1 reconstruction yields smooth render heights while
+    // remaining a bounded weighted average of the authoritative field.
+    // Global border samples make the reconstruction identical on both sides
+    // of every L0 tile edge.
+    constexpr std::array<float, 3> weights{1.0F, 2.0F, 1.0F};
+    float result{};
+    for (std::int32_t dz = -1; dz <= 1; ++dz) {
+        for (std::int32_t dx = -1; dx <= 1; ++dx) {
+            result += sourceElevationAt(tile, x + dx, z + dz)
+                * weights[static_cast<std::size_t>(dx + 1)]
+                * weights[static_cast<std::size_t>(dz + 1)];
+        }
+    }
+    return result * (1.0F / 16.0F);
 }
 
 [[nodiscard]] float climateAt(
@@ -96,7 +125,9 @@ namespace {
     std::int32_t z,
     std::size_t channel,
     float fallback) noexcept {
-    const auto index = rawIndex(tile, x, z) * 4U + channel;
+    const auto channels = static_cast<std::size_t>(std::max(tile.climateChannels, 0));
+    if (channel >= channels) return fallback;
+    const auto index = rawIndex(tile, x, z) * channels + channel;
     return index < tile.climate.size() ? tile.climate[index] : fallback;
 }
 
@@ -119,9 +150,26 @@ namespace {
     const TerrainMetricConfig& metrics) noexcept {
     const auto spacingMetres = static_cast<float>(tile.spec.spacing) * metrics.metersPerWorldUnit;
     const auto elevationScale = metrics.elevationMetersPerSourceUnit * metrics.verticalExaggeration;
-    const auto dx = (elevationAt(tile, x + 1, z) - elevationAt(tile, x - 1, z)) * elevationScale;
-    const auto dz = (elevationAt(tile, x, z + 1) - elevationAt(tile, x, z - 1)) * elevationScale;
-    return glm::normalize(glm::vec3{-dx, spacingMetres * 2.0F, -dz});
+    // Average the derivative across the perpendicular axis and use a wide
+    // baseline at every detailed LOD. A one-row central difference faithfully
+    // exposed the native field's metre quantization as parallel lighting
+    // bands even though the reconstructed surface was continuous.
+    constexpr std::int32_t radius = 2;
+    float dx{};
+    float dz{};
+    float totalWeight{};
+    for (std::int32_t offset = -radius; offset <= radius; ++offset) {
+        const auto weight = static_cast<float>(radius + 1 - std::abs(offset));
+        dx += (elevationAt(tile, x + radius, z + offset)
+            - elevationAt(tile, x - radius, z + offset)) * weight;
+        dz += (elevationAt(tile, x + offset, z + radius)
+            - elevationAt(tile, x + offset, z - radius)) * weight;
+        totalWeight += weight;
+    }
+    dx = dx / totalWeight * elevationScale;
+    dz = dz / totalWeight * elevationScale;
+    return glm::normalize(glm::vec3{
+        -dx, spacingMetres * static_cast<float>(radius * 2), -dz});
 }
 
 struct TerrainFields final {
@@ -205,20 +253,34 @@ void partitionVegetation(
         + elevationAt(tile, x, z - 1) + elevationAt(tile, x, z + 1)) * 0.25F;
     const auto macroAverage = (elevationAt(tile, x - 2, z) + elevationAt(tile, x + 2, z)
         + elevationAt(tile, x, z - 2) + elevationAt(tile, x, z + 2)) * 0.25F;
-    const auto localCurvature = (localAverage - center) / std::max(spacing * 0.32F, 1.0F);
-    const auto macroCurvature = (macroAverage - center) / std::max(spacing * 0.75F, 1.0F);
-    result.signedCurvature = 0.5F + 0.5F * std::tanh(localCurvature * 0.85F + macroCurvature * 0.45F);
+    // Curvature drives wet soil, vegetation and broad form shading, so it must
+    // not amplify the source field's one-metre elevation quantization. Measure
+    // it over a physical baseline large enough that isolated integer steps are
+    // treated as noise while real gullies and ridges remain visible.
+    const auto localCurvature = (localAverage - center) / std::max(spacing * 2.5F, 1.0F);
+    const auto macroCurvature = (macroAverage - center) / std::max(spacing * 5.0F, 1.0F);
+    result.signedCurvature = 0.5F + 0.5F * std::tanh(localCurvature + macroCurvature * 0.7F);
 
     const auto temperature = climateAt(tile, x, z, 0, 13.0F);
     const auto precipitation = std::max(0.0F, climateAt(tile, x, z, 2, 850.0F));
     const auto precipitationSeasonality = std::max(0.0F, climateAt(tile, x, z, 3, 35.0F));
+    const auto detailedSoilMoisture = climateAt(tile, x, z, 4, -1.0F);
+    const auto detailedDrainage = climateAt(tile, x, z, 5, 0.5F);
+    const auto detailedExposure = climateAt(tile, x, z, 6, 0.5F);
+    const auto detailedRockiness = climateAt(tile, x, z, 7, 0.0F);
     const auto moisture = glm::smoothstep(180.0F, 1'600.0F, precipitation);
     const auto groundWarmth = glm::smoothstep(-8.0F, 22.0F, temperature);
     const auto concavity = glm::smoothstep(0.46F, 0.82F, result.signedCurvature);
     const auto ridgeExposure = 1.0F - glm::smoothstep(0.16F, 0.46F, result.signedCurvature);
     const auto retention = 1.0F - glm::smoothstep(0.10F, 0.58F, result.slope);
-    result.wetness = std::clamp(moisture * (0.42F + concavity * 0.48F) * (0.48F + retention * 0.52F)
-        * (1.0F - 0.34F * std::clamp(precipitationSeasonality / 100.0F, 0.0F, 1.0F)), 0.0F, 1.0F);
+    const auto macroWetness = moisture * (0.42F + concavity * 0.48F)
+        * (0.48F + retention * 0.52F)
+        * (1.0F - 0.34F * std::clamp(precipitationSeasonality / 100.0F, 0.0F, 1.0F));
+    result.wetness = detailedSoilMoisture >= 0.0F
+        ? std::clamp(detailedSoilMoisture
+            * (0.76F + concavity * 0.34F)
+            * (1.0F - std::clamp(detailedDrainage, 0.0F, 1.0F) * 0.16F), 0.0F, 1.0F)
+        : std::clamp(macroWetness, 0.0F, 1.0F);
     result.macroVariation = std::clamp(fractalNoise(
         worldX / visuals.terrain.macroTextureScaleMeters,
         worldZ / visuals.terrain.macroTextureScaleMeters,
@@ -226,11 +288,14 @@ void partitionVegetation(
 
     result.rock = glm::smoothstep(visuals.terrain.rockSlopeStart, visuals.terrain.rockSlopeFull, result.slope);
     result.rock = std::clamp(result.rock + glm::smoothstep(2'100.0F, 3'650.0F, elevation) * 0.48F
-        + ridgeExposure * result.slope * 0.28F - concavity * 0.18F, 0.0F, 1.0F);
+        + ridgeExposure * result.slope * 0.28F - concavity * 0.18F
+        + detailedRockiness * 0.42F, 0.0F, 1.0F);
     const auto mediumSlope = glm::smoothstep(visuals.terrain.screeSlopeStart,
         visuals.terrain.screeSlopeFull, result.slope)
         * (1.0F - glm::smoothstep(visuals.terrain.screeSlopeFull, 0.72F, result.slope));
-    result.scree = std::clamp(mediumSlope * (0.38F + result.rock * 0.45F + concavity * 0.42F), 0.0F, 1.0F);
+    result.scree = std::clamp(mediumSlope
+        * (0.38F + result.rock * 0.45F + concavity * 0.42F
+            + detailedRockiness * 0.28F), 0.0F, 1.0F);
 
     const auto coldness = 1.0F - glm::smoothstep(
         visuals.snow.temperatureFullC, visuals.snow.temperatureStartC, temperature);
@@ -239,7 +304,8 @@ void partitionVegetation(
         visuals.snow.slopeRetentionStart, visuals.snow.slopeRetentionEnd, result.slope);
     const auto northAspect = std::clamp(result.normal.z * 0.5F + 0.5F, 0.0F, 1.0F);
     result.snow = std::clamp(std::max(coldness, elevationSnow * 0.72F) * slopeRetention
-        * (0.78F + northAspect * visuals.snow.aspectStrength) * (0.78F + concavity * 0.22F), 0.0F, 1.0F);
+        * (0.78F + northAspect * visuals.snow.aspectStrength) * (0.78F + concavity * 0.22F)
+        * (1.0F - std::clamp(detailedExposure, 0.0F, 1.0F) * 0.14F), 0.0F, 1.0F);
 
     const auto forestWarmth = glm::smoothstep(visuals.forest.minimumTemperature, 8.0F, temperature)
         * (1.0F - glm::smoothstep(34.0F, 46.0F, temperature));
@@ -252,6 +318,8 @@ void partitionVegetation(
         * (1.0F - glm::smoothstep(
             visuals.forest.treeLineStartMeters, visuals.forest.treeLineEndMeters, elevation))
         * (1.0F - result.rock) * (1.0F - result.scree * 0.72F) * (1.0F - result.snow)
+        * (1.0F - std::clamp(detailedExposure, 0.0F, 1.0F) * 0.30F)
+        * (1.0F - std::clamp(detailedRockiness, 0.0F, 1.0F) * 0.48F)
         * visuals.forest.globalDensity;
     result.forest = std::clamp(result.forest, 0.0F, 1.0F);
 
@@ -316,19 +384,32 @@ void appendVegetation(TileMesh& mesh, std::uint64_t seed, const WorldVisualConfi
 
             const auto sampleX = std::clamp(static_cast<std::int32_t>((worldX - tile.origin.x) / tile.spec.spacing), 0, visibleWidth(tile) - 1);
             const auto sampleZ = std::clamp(static_cast<std::int32_t>((worldZ - tile.origin.y) / tile.spec.spacing), 0, visibleHeight(tile) - 1);
-            const auto sampleIndex = rawIndex(tile, sampleX, sampleZ);
             const auto elevation = bilinearElevation(tile, worldX, worldZ)
                 * visuals.metrics.elevationMetersPerSourceUnit * visuals.metrics.verticalExaggeration;
-            const auto temperature = tile.climate[sampleIndex * 4U];
-            const auto temperatureStd = tile.climate[sampleIndex * 4U + 1U] / 100.0F;
-            const auto precipitation = std::max(0.0F, tile.climate[sampleIndex * 4U + 2U]);
-            const auto precipitationCv = std::max(0.0F, tile.climate[sampleIndex * 4U + 3U]);
+            // The macro climate describes the broad region, not the local
+            // mountain elevation. Never allow a favourable coarse climate or
+            // stand-noise sample to bypass the physical treeline.
+            if (elevation <= 3.5F || elevation >= visuals.forest.treeLineEndMeters) continue;
+            const auto temperature = climateAt(tile, sampleX, sampleZ, 0, 13.0F);
+            const auto temperatureStd = climateAt(tile, sampleX, sampleZ, 1, 450.0F) / 100.0F;
+            const auto precipitation = std::max(
+                0.0F, climateAt(tile, sampleX, sampleZ, 2, 850.0F));
+            const auto precipitationCv = std::max(
+                0.0F, climateAt(tile, sampleX, sampleZ, 3, 35.0F));
+            const auto soilMoisture = climateAt(tile, sampleX, sampleZ, 4, -1.0F);
+            const auto exposure = std::clamp(
+                climateAt(tile, sampleX, sampleZ, 6, 0.0F), 0.0F, 1.0F);
+            const auto substrateRockiness = std::clamp(
+                climateAt(tile, sampleX, sampleZ, 7, 0.0F), 0.0F, 1.0F);
             const auto effectiveTemperature = std::max(0.0F, temperature + temperatureStd * 0.5F);
             const auto evapotranspiration = std::max(
                 250.0F,
                 250.0F + 25.0F * effectiveTemperature + 0.7F * effectiveTemperature * effectiveTemperature);
-            const auto moisture = (precipitation / evapotranspiration)
+            auto moisture = (precipitation / evapotranspiration)
                 * (1.0F - 0.35F * std::min(1.0F, precipitationCv / 100.0F));
+            if (soilMoisture >= 0.0F) {
+                moisture = glm::mix(moisture, soilMoisture * 1.35F, 0.68F);
+            }
             const auto amplitude = temperatureStd * std::numbers::sqrt2_v<float>;
             float growingDays = 0.0F;
             if (amplitude < 0.1F) {
@@ -351,11 +432,26 @@ void appendVegetation(TileMesh& mesh, std::uint64_t seed, const WorldVisualConfi
             const auto clearing = fractalNoise(worldX / visuals.forest.clearingScaleMeters,
                 worldZ / visuals.forest.clearingScaleMeters, seed ^ 0x13198a2e03707344ULL);
             const auto standStrength = suitability * 0.48F + fields.forest * 0.74F + forestField * 0.28F;
+            const auto treeLineSuitability = 1.0F - glm::smoothstep(
+                visuals.forest.treeLineStartMeters,
+                visuals.forest.treeLineEndMeters,
+                elevation);
+            const auto terrainSuitability = treeLineSuitability
+                * (1.0F - fields.snow)
+                * (1.0F - fields.rock)
+                * (1.0F - fields.scree * 0.72F)
+                * (1.0F - exposure * 0.32F)
+                * (1.0F - substrateRockiness * 0.44F)
+                * (1.0F - glm::smoothstep(
+                    visuals.forest.maximumSlope * 0.45F,
+                    visuals.forest.maximumSlope,
+                    fields.slope));
             const auto density = glm::smoothstep(0.34F, 0.82F, standStrength)
                 * glm::mix(1.0F, glm::smoothstep(0.10F, 0.46F, clearing),
                     visuals.forest.clearingStrength)
+                * terrainSuitability
                 * visuals.forest.globalDensity;
-            if (elevation <= 3.5F || random01(cellX, cellZ, seed ^ 0xa4093822299f31d0ULL) > density) continue;
+            if (random01(cellX, cellZ, seed ^ 0xa4093822299f31d0ULL) > density) continue;
 
             const auto speciesRoll = random01(cellX + 331, cellZ - 257, seed);
             std::uint32_t species = 2U; // oak
@@ -389,7 +485,7 @@ void appendVegetation(TileMesh& mesh, std::uint64_t seed, const WorldVisualConfi
 
     if (tile.spec.level != 0) return;
 
-    constexpr double grassCell = 3.2;
+    constexpr double grassCell = 4.0;
     const auto grassStartX = static_cast<std::int64_t>(std::floor(tile.origin.x / grassCell));
     const auto grassStartZ = static_cast<std::int64_t>(std::floor(tile.origin.y / grassCell));
     const auto grassEndX = static_cast<std::int64_t>(std::ceil((tile.origin.x + tile.spec.tileWorldSize) / grassCell));
@@ -404,24 +500,30 @@ void appendVegetation(TileMesh& mesh, std::uint64_t seed, const WorldVisualConfi
                 || worldZ >= tile.origin.y + tile.spec.tileWorldSize) continue;
             const auto sampleX = std::clamp(static_cast<std::int32_t>((worldX - tile.origin.x) / tile.spec.spacing), 0, visibleWidth(tile) - 1);
             const auto sampleZ = std::clamp(static_cast<std::int32_t>((worldZ - tile.origin.y) / tile.spec.spacing), 0, visibleHeight(tile) - 1);
-            const auto sampleIndex = rawIndex(tile, sampleX, sampleZ);
             const auto elevation = bilinearElevation(tile, worldX, worldZ)
                 * visuals.metrics.elevationMetersPerSourceUnit * visuals.metrics.verticalExaggeration;
             const auto normal = normalAt(tile, sampleX, sampleZ, visuals.metrics);
-            const auto temperature = tile.climate[sampleIndex * 4U];
-            const auto precipitation = tile.climate[sampleIndex * 4U + 2U];
-            const auto precipitationCv = tile.climate[sampleIndex * 4U + 3U];
+            const auto temperature = climateAt(tile, sampleX, sampleZ, 0, 13.0F);
+            const auto precipitation = climateAt(tile, sampleX, sampleZ, 2, 850.0F);
+            const auto precipitationCv = climateAt(tile, sampleX, sampleZ, 3, 35.0F);
+            const auto soilMoisture = climateAt(tile, sampleX, sampleZ, 4, -1.0F);
+            const auto exposure = std::clamp(
+                climateAt(tile, sampleX, sampleZ, 6, 0.0F), 0.0F, 1.0F);
+            const auto substrateRockiness = std::clamp(
+                climateAt(tile, sampleX, sampleZ, 7, 0.0F), 0.0F, 1.0F);
             const auto patch = fractalNoise(worldX / 52.0, worldZ / 52.0, seed ^ 0x3f84d5b5b5470917ULL);
             const auto warmEnough = glm::smoothstep(-10.0F, 4.0F, temperature);
             const auto notScorched = 1.0F - glm::smoothstep(34.0F, 47.0F, temperature);
-            const auto moisture = glm::smoothstep(70.0F, 900.0F, precipitation)
+            auto moisture = glm::smoothstep(70.0F, 900.0F, precipitation)
                 * (1.0F - 0.28F * std::clamp(precipitationCv / 100.0F, 0.0F, 1.0F));
+            if (soilMoisture >= 0.0F) moisture = glm::mix(moisture, soilMoisture, 0.72F);
             const auto growingClimate = warmEnough * notScorched;
             const auto desertFade = glm::smoothstep(35.0F, 150.0F, precipitation);
             const auto density = std::clamp(
                 growingClimate * desertFade * glm::mix(0.78F, 0.995F, moisture)
                     + (patch - 0.5F) * 0.16F,
-                0.0F, 0.995F) * glm::smoothstep(0.72F, 0.98F, normal.y);
+                0.0F, 0.995F) * glm::smoothstep(0.72F, 0.98F, normal.y)
+                * (1.0F - exposure * 0.28F) * (1.0F - substrateRockiness * 0.58F);
             if (elevation <= 2.8F || elevation > 2'900.0F
                 || random01(cellX, cellZ, seed ^ 0x9216d5d98979fb1bULL) > density) continue;
             const auto heightPatch = fractalNoise(worldX / 38.0, worldZ / 38.0, seed ^ 0xd1310ba698dfb5acULL);

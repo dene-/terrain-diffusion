@@ -8,20 +8,6 @@ cbuffer VegetationVertexUniform : register(b0, space1)
     float4 LodRadiiAndType;
 };
 
-static const float EarthRadius = 6371000.0f;
-
-float3 projectToPlanet(float3 flatWorld, float2 cameraXZ)
-{
-    float2 delta = flatWorld.xz - cameraXZ;
-    float arc = length(delta);
-    if (arc < 0.01f) return flatWorld;
-    float2 direction = delta / arc;
-    float angle = arc / EarthRadius;
-    float radial = EarthRadius + flatWorld.y;
-    float2 projectedXZ = cameraXZ + direction * (radial * sin(angle));
-    return float3(projectedXZ.x, radial * cos(angle) - EarthRadius, projectedXZ.y);
-}
-
 struct Input
 {
     float3 Position : TEXCOORD0;
@@ -112,7 +98,7 @@ Output main(Input input)
         output.UV = input.UV;
     }
 
-    float3 world = projectToPlanet(local + origin, CameraLocalAndTime.xz);
+    float3 world = local + origin;
     float viewDistance = length(world - CameraLocalAndTime.xyz);
     output.Position = mul(ViewProjection, float4(world, 1.0f));
     output.Normal = normal;

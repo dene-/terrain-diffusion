@@ -189,10 +189,9 @@ void appendTreeCard(
 }
 
 [[nodiscard]] std::pair<std::vector<TerrainVertex>, std::vector<std::uint32_t>> makeWaterMesh() {
-    // A four-corner horizon quad becomes a single plane after vertex
-    // curvature. Concentrating a static grid around zero gives the water
+    // Concentrating a camera-relative flat grid around zero gives the water
     // metre-scale geometry near the viewer and progressively cheaper cells
-    // toward the horizon, where atmosphere hides their size.
+    // toward the view-distance boundary, where atmosphere hides their size.
     constexpr std::uint32_t segments = 128;
     constexpr std::uint32_t row = segments + 1U;
     std::vector<TerrainVertex> vertices;
@@ -835,18 +834,9 @@ void Renderer::render(const CameraState& camera, float timeSeconds, const HudSta
     }
 
     SDL_BindGPUGraphicsPipeline(pass, waterPipeline_);
-    // Keep the ocean patch only modestly beyond the geometric horizon. A
-    // permanent multi-thousand-kilometre tangent grid makes its outer cells
-    // enormous at eye level; after spherical projection those cells interpolate
-    // as steep walls in front of the camera. The horizon grows naturally with
-    // altitude, so aircraft and orbital views still receive the required
-    // coverage without sacrificing near-surface geometry quality.
-    const auto cameraHeightAboveSea = std::max(2.0, camera.absolutePosition.y);
-    const auto waterHorizon = std::sqrt(
-        2.0 * EarthRadiusMetres * cameraHeightAboveSea
-        + cameraHeightAboveSea * cameraHeightAboveSea);
-    const auto waterRadius = static_cast<float>(std::clamp(
-        waterHorizon * 1.35, 20'000.0, 4'000'000.0));
+    // The flat ocean follows the floating origin and covers the same fixed
+    // visibility budget as terrain. It never shrinks with camera altitude.
+    constexpr float waterRadius = 240'000.0F;
     const WaterVertexUniform waterVertex{
         camera.viewProjection,
         glm::vec4{camera.localPosition.x, camera.localPosition.y, camera.localPosition.z, timeSeconds},

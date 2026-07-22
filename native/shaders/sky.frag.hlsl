@@ -92,32 +92,6 @@ float3 baseSky(float3 rayDirection)
     return sky;
 }
 
-float3 orbitalAtmosphere(float3 rayDirection, float cameraAltitude)
-{
-    // Analytic shell intersection around the same spherical Earth used by the
-    // terrain and ocean vertex shaders. It adds only a thin aerial-perspective
-    // limb in orbital mode; terrain remains responsible for the solid planet.
-    static const float EarthRadius = 6371000.0f;
-    static const float AtmosphereRadius = EarthRadius + 90000.0f;
-    float3 cameraFromCenter = float3(0.0f, EarthRadius + max(cameraAltitude, 0.0f), 0.0f);
-    float b = dot(cameraFromCenter, rayDirection);
-    float c = dot(cameraFromCenter, cameraFromCenter) - AtmosphereRadius * AtmosphereRadius;
-    float discriminant = b * b - c;
-    if (discriminant <= 0.0f) return 0.0f;
-    float root = sqrt(discriminant);
-    float forwardExit = -b + root;
-    if (forwardExit <= 0.0f) return 0.0f;
-    float closestRadius = sqrt(max(dot(cameraFromCenter, cameraFromCenter) - b * b, 0.0f));
-    float closestAltitude = max(closestRadius - EarthRadius, 0.0f);
-    float density = exp(-closestAltitude / 10500.0f);
-    float shellPath = min(root * 2.0f, 900000.0f);
-    float opticalDepth = 1.0f - exp(-shellPath * density * 0.000012f);
-    float3 toSun = normalize(-SunDirectionAndTime.xyz);
-    float sunFacing = 0.55f + 0.45f * saturate(dot(rayDirection, toSun) * 0.5f + 0.5f);
-    return authoredSrgbToLinear(float3(0.20f, 0.52f, 0.92f))
-        * opticalDepth * sunFacing * 1.35f;
-}
-
 float4 main(float2 uv : TEXCOORD0) : SV_Target0
 {
     float2 screen = uv * 2.0f - 1.0f;
@@ -125,10 +99,7 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
         CameraForwardAndTanHalfFov.xyz
         + CameraRightAndAspect.xyz * screen.x * CameraForwardAndTanHalfFov.w * CameraRightAndAspect.w
         - CameraUpAndOrbital.xyz * screen.y * CameraForwardAndTanHalfFov.w);
-    float orbital = CameraUpAndOrbital.w;
     float3 sky = baseSky(rayDirection);
-    sky = lerp(sky, float3(0.003f, 0.007f, 0.018f), orbital);
-    sky += orbitalAtmosphere(rayDirection, CameraPositionAndAltitude.y) * orbital;
 
     sky *= CloudLight.z;
     return float4(sky, 1.0f);
